@@ -1,0 +1,28 @@
+[project]
+name = "llm-proxy"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.115.11",
+    "langserve>=0.3.1",
+    "pydantic-settings>=2.8.1",
+    "structlog>=25.2.0",
+    "uvicorn>=0.34.0",
+]
+
+[dependency-groups]
+dev = [
+    "commitizen>=4.4.1",
+    "pre-commit>=4.1.0",
+    "pytest>=8.3.5",
+    "ruff>=0.9.10",
+]
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+tag_format = "$version"
+version_scheme = "semver2"
+version_provider = "pep621"
+update_changelog_on_bump = true

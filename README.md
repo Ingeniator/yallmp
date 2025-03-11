@@ -5,7 +5,7 @@
 pip install uv
 uv venv
 uv pip install --dev
-uvx pre-commit install --config pyproject.toml
+uvx pre-commit install
 ```
 
 ### Running
