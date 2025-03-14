@@ -1,6 +1,7 @@
 
 from fastapi import Depends, FastAPI, Request
 from app.core.config import settings
+from app.core.proxy import proxy_request_with_retries
 from app.core.logging_config import setup_logging
 from app.services.authenticated_llm import get_authenticated_model
 from app.middlewares.logging_middleware import LoggingMiddleware
@@ -39,6 +40,11 @@ def create_app() -> FastAPI:
     @app.get("/status")
     async def status():
         return {"status": "Application is running"}
+
+    @app.api_route("/{full_path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
+    async def proxy_request(full_path: str, request: Request):
+        return await proxy_request_with_retries(full_path, request)
+
     @app.on_event("startup")
     async def startup_event():
         logger.info("Application startup...")
