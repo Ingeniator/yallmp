@@ -25,6 +25,12 @@ help:  ## Show available commands
 
 
 ## ---------- Local Development ----------
+.PHONY: dev-init
+dev-init:  ## Initialize development environment
+	uv venv
+	uv pip install --dev
+	uvx pre-commit install
+
 .PHONY: run
 run:  ## Run application
 	uv run entrypoint.py
