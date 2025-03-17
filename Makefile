@@ -35,6 +35,10 @@ dev-init:  ## Initialize development environment
 run:  ## Run application
 	uv run entrypoint.py
 
+.PHONY: run-fake-llm
+run-fake-llm:  ## Run fake LLM application
+	uv run fake_llm_entrypoint.py
+
 ## ---------- Code Quality ----------
 
 .PHONY: lint

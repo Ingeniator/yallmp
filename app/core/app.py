@@ -1,24 +1,13 @@
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import FastAPI, Request
 from app.core.config import settings
 from app.core.proxy import proxy_request_with_retries
 from app.core.logging_config import setup_logging
-from app.services.authenticated_llm import get_authenticated_model
+# from app.services.authenticated_llm import get_authenticated_model
 from app.middlewares.logging_middleware import LoggingMiddleware
 from app.middlewares.metrics_middleware import PrometheusMiddleware, metrics
-from langchain.chat_models.base import BaseChatModel
 
 logger = setup_logging()
-
-def create_fake_app() -> FastAPI:
-    """Create and configure a FastAPI application for testing."""
-    fake_app = FastAPI(title="Fake LLM and AuthPoint", debug=settings.debug)
-    
-    @fake_app.get("/{path:path}")
-    async def chat(path: str, llm: BaseChatModel = Depends(get_authenticated_model)):
-        return llm.invoke("Hello, world!")
-
-    return fake_app
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
@@ -29,9 +18,6 @@ def create_app() -> FastAPI:
     # Add Prometheus middleware
     app.add_middleware(PrometheusMiddleware)
 
-    # Mount the sub-app under `/fake`
-    app.mount("/fake", create_fake_app())
-
     # Expose metrics endpoint
     @app.get("/metrics")
     async def get_metrics():
@@ -41,9 +27,16 @@ def create_app() -> FastAPI:
     async def status():
         return {"status": "Application is running"}
 
-    @app.api_route("/{full_path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
+    @app.api_route("/llm/{full_path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
     async def proxy_request(full_path: str, request: Request):
-        return await proxy_request_with_retries(full_path, request)
+        custom_headers = {}
+        if settings.llm_authorization_type == "BEARER":
+            custom_headers["Authorization"] = f"Bearer {settings.llm_api_key}"
+        elif settings.llm_authorization_type == "APIKEY":
+            custom_headers["X-API-Key"] = settings.llm_api_key
+        elif settings.llm_authorization_type == "CERT":
+            custom_headers["Authorization"] = f"Bearer {settings.llm_api_key}"
+        return await proxy_request_with_retries(full_path, request, custom_headers)
 
     @app.on_event("startup")
     async def startup_event():

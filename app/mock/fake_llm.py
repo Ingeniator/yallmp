@@ -58,3 +58,6 @@ class FakeOpenAIChatModel(BaseChatModel):
     def _llm_type(self) -> str:
         return "fake-openai-chat"
 
+# Factory function for FastAPI Dependency Injection
+def get_fake_llm():
+    return FakeOpenAIChatModel()
