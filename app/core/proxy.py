@@ -3,31 +3,11 @@ from app.core.logging_config import setup_logging
 import asyncio
 import random
 import time
-from fastapi import FastAPI, Request
+from fastapi import Request
 from starlette.responses import Response, JSONResponse
 from collections import deque
-
+from app.core.config import settings
 logger = setup_logging()
-
-app = FastAPI()
-
-# Target backend server to forward requests
-TARGET_URL = "http://localhost:8000/fake"
-
-# Custom headers to add
-CUSTOM_HEADERS = {
-    "X-Custom-Header": "MyCustomValue"
-}
-
-# Retry configuration
-MAX_RETRIES = 5
-BASE_DELAY = 0.5  # Base delay in seconds
-BACKOFF_FACTOR = 2  # Exponential backoff multiplier
-
-# Circuit breaker configuration
-FAILURE_THRESHOLD = 5  # Number of failures before tripping
-RECOVERY_TIME = 30  # Cooldown period (seconds)
-WINDOW_SIZE = 60  # Sliding window size in seconds
 
 # Track failures in a sliding window
 failure_timestamps = deque()
@@ -41,17 +21,17 @@ async def exponential_backoff_retry(request_func, *args, **kwargs):
     global circuit_open, circuit_open_time
 
     # Check if the circuit breaker is open
-    if circuit_open and time.time() - circuit_open_time < RECOVERY_TIME:
+    if circuit_open and time.time() - circuit_open_time < settings.proxy_recovery_time:
         return JSONResponse({"error": "Circuit breaker open. Try later."}, status_code=503)
     
-    for attempt in range(MAX_RETRIES):
+    for attempt in range(settings.proxy_max_retries):
         try:
             response = await request_func(*args, **kwargs)
 
             # Handle 429 with Retry-After
             if response.status_code == 429:
                 retry_after = response.headers.get("Retry-After")
-                delay = int(retry_after) if retry_after else BASE_DELAY * (BACKOFF_FACTOR ** attempt) + random.uniform(0, 0.1)
+                delay = int(retry_after) if retry_after else settings.proxy_base_delay * (settings.proxy_backoff_factor ** attempt) + random.uniform(0, 0.1)
                 await asyncio.sleep(delay)
                 continue  # Retry again
             
@@ -65,28 +45,28 @@ async def exponential_backoff_retry(request_func, *args, **kwargs):
         failure_timestamps.append(time.time())
 
         # Remove old failures outside of the window
-        while failure_timestamps and failure_timestamps[0] < time.time() - WINDOW_SIZE:
+        while failure_timestamps and failure_timestamps[0] < time.time() - settings.proxy_window_size:
             failure_timestamps.popleft()
 
         # Check if failure threshold is exceeded
-        if len(failure_timestamps) >= FAILURE_THRESHOLD:
+        if len(failure_timestamps) >= settings.proxy_failure_threshold:
             circuit_open = True
             circuit_open_time = time.time()
             return JSONResponse({"error": "Circuit breaker activated. Try later."}, status_code=503)
 
         # Exponential backoff delay
-        delay = BASE_DELAY * (BACKOFF_FACTOR ** attempt) + random.uniform(0, 0.1)
+        delay = settings.proxy_base_delay * (settings.proxy_backoff_factor ** attempt) + random.uniform(0, 0.1)
         await asyncio.sleep(delay)
 
     return JSONResponse({"error": "Max retries exceeded"}, status_code=500)
 
-async def proxy_request_with_retries(path: str, request: Request):
+async def proxy_request_with_retries(path: str, request: Request, custom_headers: dict[str, str] = {}):
     client = httpx.AsyncClient()
     
-    target_url = f"{TARGET_URL}/{path}"
+    target_url = f"{settings.proxy_target_url}/{path}"
     method = request.method
     headers = dict(request.headers)
-    headers.update(CUSTOM_HEADERS)  # Inject additional headers
+    headers.update(custom_headers)  # Inject additional headers
     body = await request.body()
     
     try:
@@ -96,7 +76,7 @@ async def proxy_request_with_retries(path: str, request: Request):
         )
 
         # Inject custom response headers
-        for key, value in CUSTOM_HEADERS.items():
+        for key, value in custom_headers.items():
             response.headers[key] = value
 
         return Response(content=response.content, status_code=response.status_code, headers=dict(response.headers))
