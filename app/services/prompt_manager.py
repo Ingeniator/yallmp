@@ -82,7 +82,7 @@ class StaticPromptStore(PromptStore):
             raise HTTPException(status_code=400, detail=str(e))
 
     async def get_prompts(self) -> list[str]:
-        keys_to_keep = {"description", "category", "input_variables", "partial_variables"}
+        keys_to_keep = {"metadata", "input_variables", "partial_variables"}
         filtered_data = {
     key: {k: v for k, v in value.items() if k in keys_to_keep}
     for key, value in self.stored_prompts.items()

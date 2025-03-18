@@ -1,7 +1,9 @@
 {
     "_type": "prompt",
+    "metadata": {
     "description": "A prompt for telling a joke.",
-    "category": "storytelling",
+    "category": "storytelling"
+    },
     "input_variables": ["content", "adjective"],
     "partial_variables": {
         "adjective": "beautiful"

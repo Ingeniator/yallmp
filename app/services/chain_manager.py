@@ -58,8 +58,8 @@ class StaticChainStore(ChainStore):
                 chain_name = os.path.splitext(filename)[0]
                 chain_info = {
                     "path": chain_path,
-                    "description": chain_data.get("description", ""),
-                    "category": chain_data.get("category", ""),
+                    "description": chain_data.get("metadata", {}).get("description", ""),
+                    "category": chain_data.get("metadata", {}).get("category", ""),
                     "input_variables": chain_data.get("prompt", {}).get("input_variables", []),
                     "partial_variables": chain_data.get("prompt", {}).get("partial_variables", {})
                 }

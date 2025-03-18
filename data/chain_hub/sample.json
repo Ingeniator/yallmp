@@ -1,4 +1,8 @@
 {
+    "metadata": {
+        "category": "sample",
+        "description": "A sample chain for testing."
+    },
     "memory": null,
     "verbose": true,
     "prompt": {
