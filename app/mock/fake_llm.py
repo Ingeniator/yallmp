@@ -3,6 +3,8 @@ from langchain.schema import AIMessage, HumanMessage, ChatGeneration, ChatResult
 from typing import List, Dict, Any, Optional
 from pydantic import Field
 import random
+import time
+import uuid
 
 class FakeOpenAIChatModel(BaseChatModel):
     """
@@ -25,29 +27,33 @@ class FakeOpenAIChatModel(BaseChatModel):
     ])
 
     def _generate(self, messages: List[HumanMessage], stop: Optional[List[str]] = None, **kwargs) -> ChatResult:
-        """Simulates an OpenAI-style chat response with token usage statistics."""
+        """Generate a response in OpenAI chat completion format."""
+        response = random.choice(self.responses)
+        prompt_tokens = int(sum(len(msg.content.split()) for msg in messages) * 1.2)
+        completion_tokens = int(len(response.split()) * 1.2)
+        total_tokens = prompt_tokens + completion_tokens
 
-        # Select a random fake response
-        fake_response = random.choice(self.responses)
-
-        # Token usage simulation (assuming an average of 1.2 tokens per word)
-        prompt_tokens = sum(len(msg.content.split()) for msg in messages) * 1.2  # Approximate token count
-        completion_tokens = len(fake_response.split()) * 1.2
-        total_tokens = int(prompt_tokens + completion_tokens)
-
-        # Generate the AI message
-        generations = [
-            ChatGeneration(message=AIMessage(content=fake_response))
-        ]
-
-        # Include token usage statistics
-        return ChatResult(
-            generations=generations,
-            llm_output={"usage": {
-                "prompt_tokens": int(prompt_tokens),
-                "completion_tokens": int(completion_tokens),
+        completion = {
+            "id": f"chatcmpl-{uuid.uuid4().hex[:12]}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": f"{self.model}-{time.strftime('%Y-%m-%d')}",
+            "choices": [{
+                "index": 0,
+                "text": response,  # Change from message to text for LangChain compatibility
+                "logprobs": None,
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
                 "total_tokens": total_tokens
-            }}
+            }
+        }
+
+        return ChatResult(
+            generations=[ChatGeneration(message=AIMessage(content=response))],
+            llm_output=completion
         )
 
     @property
@@ -58,6 +64,5 @@ class FakeOpenAIChatModel(BaseChatModel):
     def _llm_type(self) -> str:
         return "fake-openai-chat"
 
-# Factory function for FastAPI Dependency Injection
 def get_fake_llm():
     return FakeOpenAIChatModel()

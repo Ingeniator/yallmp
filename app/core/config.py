@@ -13,6 +13,7 @@ class AppSettings(BaseSettings):
     # Feature toggles
     raw_proxy_llm_enabled: bool = False
     prompt_hub_enabled: bool = False
+    chain_hub_enabled: bool = False
 
     # Logging
     log_level: str = "INFO"
@@ -39,6 +40,11 @@ class AppSettings(BaseSettings):
     proxy_recovery_time: int = 30  # Cooldown period (seconds)
     proxy_window_size: int = 60  # Sliding window size in seconds
 
+    # Prompt hub settings
+    prompt_hub_directory: str = "data/prompt_hub"
+
+    # Chain hub settings
+    chain_hub_directory: str = "data/chain_hub"
     
     model_config = SettingsConfigDict(env_prefix="LLM_PROXY_", env_file=".env", env_file_encoding="utf-8")
 

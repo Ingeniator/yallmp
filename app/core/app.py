@@ -41,6 +41,17 @@ def create_app() -> FastAPI:
         @app.post("/prompt/{name}")
         async def format_prompt(name: str, data: PromptVariables):
             return await promptStore.format_prompt(name, data)
+
+    if settings.chain_hub_enabled:
+        from app.services.chain_manager import chainStore, PromptVariables
+        @app.get("/chains")
+        async def get_chains():
+            return await chainStore.get_chains()
+
+        @app.post("/chain/{name}")
+        async def chain_execute(name: str, data: PromptVariables):
+            return await chainStore.execute(name, data)
+
     @app.on_event("startup")
     async def startup_event():
         logger.info("Application startup...")

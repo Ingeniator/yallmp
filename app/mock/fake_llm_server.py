@@ -50,7 +50,7 @@ def create_app() -> FastAPI:
     # Chat Completions
     @app.post("/v1/chat/completions")
     async def chat(llm: BaseChatModel = Depends(get_fake_llm)):
-        return llm.invoke("Hello, world!")
+        return llm.invoke("Hello, world!").response_metadata
 
     # Embeddings
     @app.post("/v1/embeddings")
@@ -135,4 +135,3 @@ def create_app() -> FastAPI:
         }
 
     return app
-
