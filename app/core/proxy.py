@@ -61,7 +61,11 @@ async def exponential_backoff_retry(request_func, *args, **kwargs):
     return JSONResponse({"error": "Max retries exceeded"}, status_code=500)
 
 async def proxy_request_with_retries(path: str, request: Request, custom_headers: dict[str, str] = {}):
-    client = httpx.AsyncClient()
+    if settings.proxy_authorization_type == "CERT":
+        cert = (settings.proxy_api_cert_path, settings.proxy_api_cert_path)
+    else:
+        cert = None
+    client = httpx.AsyncClient(cert=cert)
     
     target_url = f"{settings.proxy_target_url}/{path}"
     method = request.method
