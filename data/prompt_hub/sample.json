@@ -1,0 +1,11 @@
+{
+    "_type": "prompt",
+    "description": "A prompt for storytelling.",
+    "category": "storytelling",
+    "input_variables": ["content", "adjective"],
+    "partial_variables": {
+        "adjective": "beautiful"
+    },
+    "template": "Tell me a {adjective} story about {content}.",
+    "template_format": "f-string"
+}

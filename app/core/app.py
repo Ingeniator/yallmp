@@ -32,6 +32,15 @@ def create_app() -> FastAPI:
         async def proxy_request(full_path: str, request: Request, custom_headers: dict[str, str] = Depends(get_authorization_headers)):
             return await proxy_request_with_retries(full_path, request, custom_headers)
 
+    if settings.prompt_hub_enabled:
+        from app.services.prompt_manager import promptStore, PromptVariables
+        @app.get("/prompts")
+        async def get_prompts():
+            return await promptStore.get_prompts()
+
+        @app.post("/prompt/{name}")
+        async def format_prompt(name: str, data: PromptVariables):
+            return await promptStore.format_prompt(name, data)
     @app.on_event("startup")
     async def startup_event():
         logger.info("Application startup...")

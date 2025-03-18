@@ -12,6 +12,7 @@ class AppSettings(BaseSettings):
 
     # Feature toggles
     raw_proxy_llm_enabled: bool = False
+    prompt_hub_enabled: bool = False
 
     # Logging
     log_level: str = "INFO"
