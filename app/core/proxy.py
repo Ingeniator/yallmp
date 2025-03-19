@@ -29,6 +29,13 @@ client = AsyncClient(
     )
 )
 
+async def get_circuit_status():
+    return {
+        "circuit_open": circuit_open,
+        "circuit_open_time": circuit_open_time,
+        "failure_timestamps": failure_timestamps
+    }
+
 async def exponential_backoff_retry(func, *args, **kwargs):
     """Performs a request with exponential backoff on retryable errors."""
     global circuit_open, circuit_open_time, failure_timestamps

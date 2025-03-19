@@ -45,6 +45,8 @@ class AppSettings(BaseSettings):
 
     # Chain hub settings
     chain_hub_directory: str = "data/chain_hub"
+
+    version: str = "0.1.0"
     
     model_config = SettingsConfigDict(env_prefix="LLM_PROXY_", env_file=".env", env_file_encoding="utf-8")
 
