@@ -1,0 +1,54 @@
+include:
+  - project: tagme/cd-pipeline
+    file: variables-deployto.yml
+  - project: registry/gitlab-ci
+    file:
+      - variables.yml
+      - buildah.yml
+  - template: Security/SAST.gitlab-ci.yml
+
+variables:
+  extends: .variables
+  # Buildah - сборка образа
+  DOCKERFILE_PATH: "."
+  DOCKERFILE: "Dockerfile"
+  CI_COMMIT_TAG: $CI_COMMIT_BRANCH #image tag
+  # Vault - использование переменных из Vault
+  HYDRA_ENABLED: true # опционально - работа с Hashicorp Vault
+  VAULT_ADDR: https://vault.dev.sberdevices.ru
+  VAULT_AUTH_ROLE: "tagme-deploy"
+  VAULT_SECRET_PATH: tagme/data/VAULT
+  # CISO - проверка кода
+  #  CLOUD_DEFECTDOJO_PRODUCT_TYPE: "some-product"
+  # MR (PR)
+  # NEED_CD_MR: false # по умолчанию true, включает MR release CD ветки в source_branch
+  # SOURCE_BRANCH: main # по умолчанию main, может быть любой веткой релиза, это source_branch откуда сделается релиз CD и куда прилетит МР (МР функционал работает только с source_branch равным main либо master)
+  # NEED_VOTES: 2 # опционально для МР кол-во лайков для аппрува и дальнейшего продвижения пайплайна (незабудьте переключить опцию  Automatically resolve merge request diff threads when they become outdated  )
+
+stages:
+  - test
+  - build
+  - deploy
+
+sast:
+  stage: test
+
+build_image:
+  stage: build
+  extends: 
+    - .buildah
+    - .tokens
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api"
+
+deploy_k8s:
+  stage: deploy
+  variables:
+    DEPLOY_TO: $DEPLOY_TO
+    COMPONENT: $CI_PROJECT_NAME
+    VERSION: $CI_COMMIT_BRANCH
+  trigger:
+    project: tagme/cd-pipeline
+    strategy: depend
+  rules:
+    - if: $DEPLOY_TO != "skip" && $CI_PIPELINE_SOURCE == "web"
