@@ -1,0 +1,13 @@
+{
+    "_type": "prompt",
+    "metadata": {
+      "category": "instruction",
+      "description": "Выделить главное"
+    },
+    "input_variables": ["instruction"],
+    "partial_variables": {
+      "role": "Ты системный аналитик, который умеет суммаризировать инструкции."
+    },
+    "template": "{role} Суммаризируй текст по пунктам и верни в виде HTML верстки: {instruction}",
+    "template_format": "f-string"
+}

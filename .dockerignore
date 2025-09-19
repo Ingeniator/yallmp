@@ -1,3 +1,9 @@
 .gitlab-ci.yml
-Dockerfile
-README.md
+.dockerignore
+.helm
+*.yml
+*.yaml
+.git*
+Jenkinsfile*
+*.md
+VERSION

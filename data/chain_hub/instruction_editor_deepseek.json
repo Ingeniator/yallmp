@@ -1,0 +1,32 @@
+{
+    "metadata": {
+        "category": "instruction",
+        "description": "Отредактировать выделенный фрагмент текста"
+    },
+    "memory": null,
+    "verbose": true,
+    "prompt": {
+        "input_variables": [
+            "instruction"
+        ],
+        "partial_variables": {
+            "role": "Ты системный аналитик, который умеет редактировать инструкции."
+        },
+        "output_parser": null,
+        "template": "{role} Исправь логические ошибки в тексте и верни ответ в виде HTML верстки: {instruction}",
+        "template_format": "f-string"
+    },
+    "llm": {
+        "_type": "giga-chat-model",
+        "model": "DeepSeek-R1",
+        "max_tokens": null,
+        "streaming": false,
+        "profanity": true,
+        "temperature": 0.0,
+        "repetition_penalty": null,
+        "top_p": 1,
+        "verify_ssl_certs": false
+    },
+    "output_key": "text",
+    "_type": "llm_chain"
+}

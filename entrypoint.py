@@ -1,14 +1,33 @@
-from fastapi import FastAPI
-import uvicorn
+"""Main application entrypoint.
 
+Configures logging, creates FastAPI app, and starts the server.
+"""
 
-app = FastAPI()
+from app.core.config import settings
+from app.core.app import create_app
+from app.core.logging_config import setup_logging
+from dotenv import load_dotenv
+from pathlib import Path
+# Configure logging
+logger = setup_logging().bind(module=__name__)
 
+# Create FastAPI application
+app = create_app()
 
-@app.get("/")
-def root():
-    return {"msg": "Hello World!"}
-
-
+# load envs
+env_path = Path(".env")
+if env_path.exists():
+    load_dotenv(dotenv_path=env_path)
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8080)
+    import uvicorn
+
+    logger.info(f"Starting server on {settings.host}:{settings.port}")
+    uvicorn.run(
+        "entrypoint:app",
+        workers=settings.workers,
+        host=settings.host,
+        port=settings.port,
+        timeout_keep_alive=settings.timeout_keep_alive,
+        reload=settings.debug,
+        log_level="debug" if settings.debug else "info",
+    )

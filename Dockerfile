@@ -4,10 +4,17 @@ WORKDIR /app
 
 COPY requirements.txt .
 
-RUN pip3 install --index-url https://nexus.sberdevices.ru/repository/Pypi/simple/ --no-cache-dir -r requirements.txt
+COPY pyproject.toml uv.lock ./
+# Актуализация зависимостей
+RUN pip3 install uv --index-url https://nexus.sberdevices.ru/repository/Pypi/simple/ && \
+    python3 -m uv venv .venv  && \
+    python3 -m uv sync
 
-COPY entrypoint.py .
+COPY . .
 
-EXPOSE 8080
+# Объявляем порты
+EXPOSE 5000
 
-CMD ["python3", "entrypoint.py"]
+ENV PATH="/app/.venv/bin:${PATH}"
+
+ENTRYPOINT ["./start.sh"]

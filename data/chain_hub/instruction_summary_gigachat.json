@@ -1,0 +1,35 @@
+{
+    "metadata": {
+        "category": "instruction",
+        "description": "Выделить главное"
+    },
+    "memory": null,
+    "verbose": true,
+    "prompt": {
+        "input_variables": [
+            "instruction"
+        ],
+        "partial_variables": {
+            "role": "Ты системный аналитик, который умеет суммаризировать инструкции."
+        },
+        "output_parser": null,
+        "template": "{role} Суммаризируй текст по пунктам и верни в виде HTML верстки: {instruction}",
+        "template_format": "f-string"
+    },
+    "llm": {
+        "_type": "giga-chat-model",
+        "model_name": "GigaChat-2:latest",
+        "request_timeout": null,
+        "max_tokens": null,
+        "streaming": false,
+        "profanity": true,
+        "temperature": 0.0,
+        "frequency_penalty": 0,
+        "presence_penalty": 0,
+        "repetition_penalty": null,
+        "top_p": 1,
+        "verify_ssl_certs": false
+    },
+    "output_key": "text",
+    "_type": "llm_chain"
+}

@@ -1,0 +1,27 @@
+# Python-generated files
+__pycache__/
+.pytest_cache
+*.py[oc]
+build/
+build/
+.vscode/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Environment variables
+.env
+.env.dev
+dev/client.key
+dev/client.cert
+.snapshot.txt
+small.json
+test.json
+curl.txt
+image.png
+**/node_modules/*
+tests/load/report.html
+tests/load/attack.sh

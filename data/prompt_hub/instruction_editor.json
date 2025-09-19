@@ -1,0 +1,13 @@
+{
+    "_type": "prompt",
+    "metadata": {
+      "category": "instruction",
+      "description": "Отредактировать выделенный фрагмент текста"
+    },
+    "input_variables": ["instruction"],
+    "partial_variables": {
+      "role": "Ты системный аналитик, который умеет редактировать инструкции."
+    },
+    "template": "{role} Исправь логические ошибки в тексте и верни ответ в виде HTML верстки: {instruction}",
+    "template_format": "f-string"
+}
