@@ -2,7 +2,7 @@ FROM registry.sberdevices.ru/registry/tools/python:3.11.4
 
 WORKDIR /app
 
-COPY pyproject.toml uv.lock ./
+COPY pyproject.toml ./
 # Актуализация зависимостей
 RUN pip3 install uv --index-url https://nexus.sberdevices.ru/repository/Pypi/simple/ && \
     python3 -m uv venv .venv  && \
