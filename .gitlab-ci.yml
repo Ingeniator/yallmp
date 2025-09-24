@@ -52,3 +52,17 @@ deploy_k8s:
     strategy: depend
   rules:
     - if: $DEPLOY_TO != "skip" && $CI_PIPELINE_SOURCE == "web"
+
+deploy_to_dev_k8s:
+  stage: deploy
+  variables:
+    DEPLOY_TO: "cloud_lt/lt-tagme"
+    COMPONENT: "tagme-x-ai-gateway"
+    VERSION: "main"
+  trigger:
+    project: tagme/cd-pipeline
+    strategy: depend
+  rules:
+    - if: >
+        $CI_PIPELINE_SOURCE == "push" 
+        && $CI_COMMIT_BRANCH == "main"
