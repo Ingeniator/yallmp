@@ -39,7 +39,9 @@ build_image:
     - .buildah
     - .tokens
   rules:
-    - if: $CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api"
+    - if: >
+        ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api")
+        || ($CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "main"
 
 deploy_k8s:
   stage: deploy
