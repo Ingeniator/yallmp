@@ -47,7 +47,7 @@ deploy_to_dev_k8s:
   stage: deploy
   variables:
     DEPLOY_TO: "cloud_lt/lt-tagme"
-    COMPONENT: "tagme-x-ai-gateway"
+    COMPONENT: "$CI_PROJECT_NAME"
     VERSION: "main"
   trigger:
     project: tagme/cd-pipeline
