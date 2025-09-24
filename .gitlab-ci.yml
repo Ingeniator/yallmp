@@ -43,18 +43,6 @@ build_image:
         $CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api"
         || ($CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "main")
 
-deploy_k8s:
-  stage: deploy
-  variables:
-    DEPLOY_TO: $DEPLOY_TO
-    COMPONENT: $CI_PROJECT_NAME
-    VERSION: $CI_COMMIT_BRANCH
-  trigger:
-    project: tagme/cd-pipeline
-    strategy: depend
-  rules:
-    - if: $DEPLOY_TO != "skip" && $CI_PIPELINE_SOURCE == "web"
-
 deploy_to_dev_k8s:
   stage: deploy
   variables:
@@ -68,3 +56,15 @@ deploy_to_dev_k8s:
     - if: >
         $CI_PIPELINE_SOURCE == "push" 
         && $CI_COMMIT_BRANCH == "main"
+
+deploy_k8s:
+  stage: deploy
+  variables:
+    DEPLOY_TO: $DEPLOY_TO
+    COMPONENT: $CI_PROJECT_NAME
+    VERSION: $CI_COMMIT_BRANCH
+  trigger:
+    project: tagme/cd-pipeline
+    strategy: depend
+  rules:
+    - if: $DEPLOY_TO != "skip" && $CI_PIPELINE_SOURCE == "web"
