@@ -46,7 +46,7 @@ build_image:
 deploy_to_dev_k8s:
   stage: deploy
   variables:
-    DEPLOY_TO: "cloud_lt/lt-tagme"
+    DEPLOY_TO: "cloud_pd/pd-tagme-x"
     COMPONENT: "$CI_PROJECT_NAME"
     VERSION: "main"
   trigger:
