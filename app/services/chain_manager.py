@@ -1,8 +1,8 @@
 import os
 from abc import ABC, abstractmethod
-from langchain.chains import LLMChain
-from langchain.prompts import PromptTemplate
-from langchain.chains.loading import load_chain
+from langchain_classic.chains import LLMChain
+from langchain_core.prompts import PromptTemplate
+from langchain_classic.chains.loading import load_chain
 from langchain_community.llms.loading import load_llm_from_config
 from app.core.config import settings
 from app.core.logging_config import setup_logging
