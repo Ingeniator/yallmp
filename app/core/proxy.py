@@ -279,6 +279,8 @@ async def proxy_request_with_retries(client: AsyncClient, path: str, request: Re
             headers_safe_to_log = headers
             if "Authorization" in headers_safe_to_log:
                 headers_safe_to_log["Authorization"] = headers.get("Authorization", "No Authorization header")[:25] #don't show full authorization header
+            if "X-API-KEY" in headers_safe_to_log:
+                headers_safe_to_log["X-API-KEY"] = headers.get("X-API-KEY", "No X-API-KEY header")[:5] #don't show full X-API-KEY header
             error_response = {
                 "error": {
                     "status_code": response.status_code,
