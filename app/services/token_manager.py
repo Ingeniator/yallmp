@@ -39,6 +39,6 @@ class OIDCTokenManager:
             try:
                 await self.fetch_token(client)
             except Exception as e:
-                logger.error(f"Error fetching token: {e}")
+                logger.error(f"Error fetching token: {type(e).__name__}")
                 return "Error fetching token"
         return self.token

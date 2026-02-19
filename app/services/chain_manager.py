@@ -6,6 +6,7 @@ from langchain_classic.chains.loading import load_chain
 from langchain_community.llms.loading import load_llm_from_config
 from app.core.config import settings
 from app.core.logging_config import setup_logging
+from app.core.security import redact_headers
 from app.schemas.prompt import PromptVariables, ChainMetadataForTracking
 from app.services.metrics_callback_handler import MetricsCallbackHandler
 import json
@@ -39,6 +40,13 @@ class ChainStore(ABC):
         """
         pass
 
+def _redact_response_headers(headers):
+    """Redact sensitive values from response headers (dict or string)."""
+    if isinstance(headers, dict):
+        return redact_headers(headers)
+    # If headers came as a raw string / bytes, drop them entirely
+    return "[REDACTED]"
+
 def safe_parse_gigachat_exception(e):
     def safe_to_str(value):
         if isinstance(value, bytes):
@@ -63,7 +71,7 @@ def safe_parse_gigachat_exception(e):
             "url": safe_to_str(url),
             "status_code": safe_to_str(status_code),
             "content": safe_to_str(content),
-            "headers": safe_to_str(headers),
+            "headers": _redact_response_headers(headers),
             "message": content_data
         }
     except (json.JSONDecodeError, TypeError) as e:
@@ -72,7 +80,7 @@ def safe_parse_gigachat_exception(e):
             "url": safe_to_str(url),
             "status_code": safe_to_str(status_code),
             "content": safe_to_str(content),
-            "headers": safe_to_str(headers),
+            "headers": _redact_response_headers(headers),
             "message": content_data or str(e),
             "type": type(e).__name__,
         }

@@ -11,6 +11,7 @@ from app.schemas.prompt import ChainMetadataForTracking, ChainType
 import json
 import fnmatch
 from typing import AsyncIterator
+from app.core.security import redact_headers
 
 logger = setup_logging()
 
@@ -203,45 +204,46 @@ async def get_model_version(model_name: str, client: AsyncClient, request: Reque
                 return {"version": f'{name}:{version}'}
         else:
             response_dict = extract_content(response)
+            logger.error("Proxy error details", details={
+                "status_code": response.status_code,
+                "target_url": target_url,
+                "response": response_dict,
+            })
             error_response = {
                 "error": {
                     "status_code": response.status_code,
-                    "message": response_dict.get("message", "Proxy request failed(1)"),
+                    "message": response_dict.get("message", "Proxy request failed"),
                     "details": {
-                        "target_url": target_url,
                         "response": response_dict
                     }
                 }
             }
-            logger.error("Proxy error details", details=error_response)
             return JSONResponse(content=error_response, status_code=response.status_code)
 
     except Exception as e:
-        error_response = {
+        logger.error("get_model_version exception", details={
+            "target_url": target_url,
+            "exception": str(e),
+            "exception_type": type(e).__name__
+        })
+        return JSONResponse(content={
             "error": {
                 "status_code": 500,
                 "message": "get_model_version request failed",
-                "details": {
-                    "target_url": target_url,
-                    "exception": str(e),
-                    "exception_type": type(e).__name__
-                }
             }
-        }
-        logger.error("get_model_version exception", details=error_response)
-        return JSONResponse(content=error_response, status_code=500)
+        }, status_code=500)
 
 async def proxy_request_with_retries(client: AsyncClient, path: str, request: Request, custom_headers: dict[str, str] = {}):
     target_url = f"{settings.proxy_target_url}/{path}"
     method = request.method
     headers = dict(request.headers)
-    logger.debug(f"original headers {headers}")
+    logger.debug(f"original headers {redact_headers(headers)}")
     exclude = { h.strip().lower() for h in settings.proxy_exclude_headers.split(",") if h.strip()}
     headers = {k: v for k, v in headers.items() if not any(fnmatch.fnmatch(k.lower(), pattern) for pattern in exclude)}
-    logger.debug(f"cleaned headers {headers}")
+    logger.debug(f"cleaned headers {redact_headers(headers)}")
     headers.update(custom_headers)  # Inject additional headers
     headers["accept-encoding"]="identity" # Don't accept gzip, br, etc to avoid proxing problem when content decoded but header is
-    logger.debug(f"final headers {headers}")
+    logger.debug(f"final headers {redact_headers(headers)}")
     #custom_response_headers = {}
 
     try:
@@ -277,38 +279,41 @@ async def proxy_request_with_retries(client: AsyncClient, path: str, request: Re
                 )
 
         else:
-            headers_safe_to_log = headers
-            if "Authorization" in headers_safe_to_log:
-                headers_safe_to_log["Authorization"] = headers.get("Authorization", "No Authorization header")[:25] #don't show full authorization header
             response_dict = extract_content(response)
+            # Log full details (with redacted headers) for debugging
+            logger.error("Proxy error details", details={
+                "status_code": response.status_code,
+                "target_url": target_url,
+                "method": method,
+                "headers": redact_headers(headers),
+                "response": response_dict,
+                "circuit_breaker_state": "open" if response.status_code == 503 else "unknown",
+            })
+            # Return sanitized error to client — no headers, no internal URLs
             error_response = {
                 "error": {
                     "status_code": response.status_code,
-                    "message": response_dict.get("message", "Proxy request failed(2)"),
+                    "message": response_dict.get("message", "Proxy request failed"),
                     "details": {
-                        "target_url": target_url,
-                        "method": method,
-                        "headers": headers_safe_to_log,
                         "response": response_dict,
                         "circuit_breaker_state": "open" if response.status_code == 503 else "unknown",
                     }
                 }
             }
-            logger.error("Proxy error details", details=error_response)
             return JSONResponse(content=error_response, status_code=response.status_code)
 
     except Exception as e:
-        error_response = {
+        # Log full details for debugging
+        logger.error("Proxy exception", details={
+            "target_url": target_url,
+            "method": method,
+            "exception": str(e),
+            "exception_type": type(e).__name__
+        })
+        # Return sanitized error to client — no internal URLs or exception details
+        return JSONResponse(content={
             "error": {
                 "status_code": 500,
                 "message": "Proxy request failed",
-                "details": {
-                    "target_url": target_url,
-                    "method": method,
-                    "exception": str(e),
-                    "exception_type": type(e).__name__
-                }
             }
-        }
-        logger.error("Proxy exception", details=error_response)
-        return JSONResponse(content=error_response, status_code=500)
+        }, status_code=500)

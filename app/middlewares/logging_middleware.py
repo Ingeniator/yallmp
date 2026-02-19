@@ -1,4 +1,5 @@
 from app.core.logging_config import setup_logging
+from app.core.security import redact_headers
 import logging
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -22,10 +23,8 @@ class LoggingMiddleware(BaseHTTPMiddleware):
 
         start_time = time.time()
 
-        headers = dict(request.headers)
-        if "Authorization" in headers:
-            headers["Authorization"] = headers.get("Authorization", "No Authorization header")[:25] #don't show full authorization header
-                    
+        headers = redact_headers(dict(request.headers))
+
         # Logging request details
         log_data = {
             "method": request.method,
