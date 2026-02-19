@@ -1,33 +1,44 @@
-import httpx
+from httpx import AsyncClient
 import time
+import uuid
+from app.core.logging_config import setup_logging
+from app.core.config import settings
+
+logger = setup_logging()
 
 class OIDCTokenManager:
-    def __init__(self, authorization_url, client_id, client_secret):
+    def __init__(self, authorization_url, credentials):
         self.authorization_url = authorization_url
-        self.client_id = client_id
-        self.client_secret = client_secret
+        self.credentials = credentials
         self.token = None
         self.expires_at = 0  # Timestamp when the token expires
 
-    async def fetch_token(self):
+    async def fetch_token(self, client: AsyncClient):
         """Fetch a new access token using client credentials grant."""
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                self.authorization_url,
-                data={
-                    "grant_type": "client_credentials",
-                    "client_id": self.client_id,
-                    "client_secret": self.client_secret
-                },
-                headers={"Content-Type": "application/x-www-form-urlencoded"}
-            )
-            response.raise_for_status()
-            data = response.json()
-            self.token = data["access_token"]
-            self.expires_at = time.time() + data["expires_in"] - 10  # Refresh slightly before expiration
+        response = await client.post(
+            self.authorization_url,
+            data={
+                "scope": settings.chain_default_scope
+            },
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "RqUID": f"{uuid.uuid4()}",
+                "Authorization": f"Basic {self.credentials}"
+            }
+        )
+        response.raise_for_status()
+        data = response.json()
+        self.token = data.get("access_token", data.get("tok", ""))
+        self.expires_at = data.get("expires_at", data.get("exp", "")) - 20*1000  # Refresh slightly before expiration 20s before
+        logger.debug(self.expires_at)
     
-    async def get_token(self):
+    async def get_token(self, client: AsyncClient):
         """Ensure the token is fresh and return it."""
-        if not self.token or time.time() >= self.expires_at:
-            await self.fetch_token()
+        if not self.token or time.time()* 1000 >= self.expires_at:
+            logger.debug("time to refresh token")
+            try:
+                await self.fetch_token(client)
+            except Exception as e:
+                logger.error(f"Error fetching token: {e}")
+                return "Error fetching token"
         return self.token

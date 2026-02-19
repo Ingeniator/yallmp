@@ -68,6 +68,8 @@ class AppSettings(BaseSettings):
     chain_default_key_file: str = ""
     chain_default_auth_url: str = ""
     chain_default_credentials: str = ""
+    chain_default_scope: str = "GIGACHAT_API_CORP"
+    chain_default_available_chat_models: list[str] = ["Gigachat:latest", "GigaChat-Pro", "GigaChat-Max", "Gigachat-2:latest", "DeepSeek-R1"]
     chain_default_json_file: str = "./data/llm_hub/default.json"
 
     version: str = "0.1.0"

@@ -87,6 +87,7 @@ class StaticChainStore(ChainStore):
         self.chains_directory = chains_directory
         self.stored_chains = {}
         self._load_chains()
+        self.default_available_chat_models = settings.chain_default_available_chat_models
 
     def _load_chains(self):
         """Load all chain files from the chains directory."""
@@ -164,6 +165,7 @@ class StaticChainStore(ChainStore):
         if not chain.llm.auth_url and settings.chain_default_auth_url:
             chain.llm.auth_url = settings.chain_default_auth_url
             chain.llm.credentials = settings.chain_default_credentials
+            chain.llm.scope = settings.chain_default_scope
 
         metrics_handler = MetricsCallbackHandler(metadata=metadata)
 
