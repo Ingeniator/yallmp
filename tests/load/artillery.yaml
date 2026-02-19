@@ -1,0 +1,90 @@
+config:
+  target: "{{ $env.HOSTNAME }}"
+  variables:
+    realm: 
+      - "tagme-public"
+    client_id: 
+      - "tagme"
+    username: 
+      - "{{ $env.USER}}"
+    password: 
+      - "{{ $env.PASS}}"
+    organization: 
+     - "{{ $env.ORG_ID}}"
+  tls:
+    rejectUnauthorized: false
+  plugins:
+    ensure: {}
+  ensure:
+    thresholds:
+      - "http.response_time.p95": 500 # p95 of response time must be <500:
+    conditions:
+      - expression: "http.codes.200 == http.requests"
+  environments:
+    functional:
+      phases:
+        - name: functional_test
+          duration: 1
+          arrivalCount: 1
+      plugins:
+        expect:
+          formatter: "pretty"
+          expectDefault200: true
+          reportFailuresAsErrors: true
+          useOnlyRequestNames: true
+      ensure:
+        thresholds:
+          - "http.response_time.p95": 300 # p95 of response time must be <300:
+    load:
+      phases:
+        - name: load_test
+          duration: 60
+          arrivalRate: 10 #RPS
+      ensure:
+        p95: 700
+        p99: 2000
+      plugins:
+        apdex: {}
+      metrics-by-endpoint:
+        useOnlyRequestNames: true # Group metrics by request name rather than URL
+    peak:
+      # This configuration outlines three distinct testing phases:
+      # Warm up phase: Starts with a moderate load, increasing from 5 to 10 users per second over one minute. This simulates a gentle increase in traffic, letting the system adjust smoothly.
+      # Ramp up to peak load phase: Escalates the traffic from 10 to 50 users per second within a minute. This phase aims to mimic a rapid surge in user activity, testing how the system copes with abrupt demand spikes.
+      # Sustained peak load phase: Maintains a high traffic volume of 50 users per second for two minutes, challenging the server's ability to handle prolonged heavy loads.
+      - duration: 60
+        arrivalRate: 5
+        rampTo: 10
+        name: Warm up phase
+      - duration: 60
+        arrivalRate: 10
+        rampTo: 50
+        name: Ramp up to peak load
+      - duration: 120
+        arrivalRate: 50
+        name: Sustained peak load
+before:
+  flow:
+    - log: 'Get auth token'
+    - post:
+        url: '/auth/realms/{{realm}}/protocol/openid-connect/token'
+        headers:
+          Organization-Id: "{{organization}}"
+          Content-Type: "application/x-www-form-urlencoded"
+        body: 'grant_type=password&client_id={{client_id}}&username={{username}}&password={{password}}'
+        expect:
+          - statusCode: 200 
+        capture:
+          - json: $.access_token
+            as: token
+scenarios:
+  - name: "upload files"
+    flow:
+      - post:
+          url: "/ai/llm/v1/files"
+          headers:
+            Authorization: "Bearer {{ token }}"
+          contentType: "multipart/form-data"
+          formData:
+            file: "@{{ $env.FILE_PATH }}"
+            purpose: "general"

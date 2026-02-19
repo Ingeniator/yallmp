@@ -1,0 +1,20 @@
+{
+  "name": "unit_load_test",
+  "version": "1.0.0",
+  "description": "unit like load test",
+  "main": "index.js",
+  "scripts": {
+    "prepare_test_files": "./generate_test_files.sh",
+    "func_test": "npx artillery run ./artillery.yaml  --environment functional",
+    "load_test": "npx artillery run ./artillery.yaml  --environment load",
+    "report": "npx artillery report --output report.html report.json"
+  },
+  "dependencies": {
+    "artillery": "2.0.20",
+    "artillery-plugin-expect": "^2.17.0",
+    "artillery-plugin-ensure": "^1.6.0",
+    "artillery-plugin-publish-metrics": "^2.22.0",
+    "artillery-plugin-apdex": "^1.8.0",
+    "artillery-plugin-metrics-by-endpoint": "^1.17.0"
+  }
+}

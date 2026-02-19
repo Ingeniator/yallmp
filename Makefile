@@ -22,32 +22,82 @@ RESET := \033[0m
 help:  ## Show available commands
 	@echo "$(CYAN)Available commands:$(RESET)"
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "$(CYAN)%-15s$(RESET) %s\n", $$1, $$2}'
+## ---------- Snaphot ---------------
+.PHONY: snapshot-create
+snapshot-create:
+	 find . -type f -not -path './dev/*' -not -path './tests/load/node_modules/*' -not -path './uv.lock' -not -path './.git/*' -not -path '**/__pycache__/*' -not -path '**/.DS_Store' -not -path './.venv/*' -not -path './.*' -exec bash -c 'printf "\n>>> %s\n" "{}"; cat "{}"' \; > ./.snapshot.txt
 
-
+.PHONY: snapshot-restore
+snapshot-restore:
+	@echo "Restoring files from $(SNAPSHOT) into $(SCRIPT_DIR)"
+	@awk -v base_dir="$(SCRIPT_DIR)" '\
+		function get_dir(path,  n, parts, dir) {\
+			n = split(path, parts, "/");\
+			dir = parts[1];\
+			for (i = 2; i < n; i++) dir = dir "/" parts[i];\
+			return (n > 1) ? dir : ".";\
+		}\
+		function remove_last_blank_line(file,   cmd, last) {\
+			cmd = "tail -n 1 '\''" file "'\''";\
+			cmd | getline last;\
+			close(cmd);\
+			if (last == "") {\
+				cmd = "sed -i \"\" -e '\''$$d'\'' '\''" file "'\''";\
+				system(cmd);\
+			}\
+		}\
+		BEGIN { out = ""; first = 1 }\
+		/^>>> / {\
+			if (!first && out != "") {\
+				close(out);\
+				remove_last_blank_line(out);\
+			}\
+			first = 0;\
+			relpath = substr($$0, 5);\
+			gsub(/^[.]\//, "", relpath);\
+			dir = get_dir(relpath);\
+			system("mkdir -p '\''" base_dir "/" dir "'\''");\
+			out = base_dir "/" relpath;\
+			system("> '\''" out "'\''");\
+			next;\
+		}\
+		{ if (out != "") print >> out }\
+		END {\
+			if (out != "") {\
+				close(out);\
+				remove_last_blank_line(out);\
+			}\
+		}\
+	' "$(SNAPSHOT)"
 ## ---------- Local Development ----------
 .PHONY: dev-init
 dev-init:  ## Initialize development environment
-	uv venv
-	uv pip install --dev
-	uvx pre-commit install
+	python3 -m uv venv
+	python3 -m uv pip install --dev
+	python3 -m uv run pre-commit install
 
 .PHONY: run
 run:  ## Run application
-	uv run entrypoint.py
+	mkdir -p /tmp/metrics
+	python3 -m uv run entrypoint.py
 
 .PHONY: run-fake-llm
 run-fake-llm:  ## Run fake LLM application
-	uv run fake_llm_entrypoint.py
+	python3 -m uv run fake_llm_entrypoint.py
 
 ## ---------- Code Quality ----------
 
 .PHONY: lint
-lint:  ## Run linting (Python example)
-	uvx ruff check --fix .
+lint:  ## Run auto-formatting and linting
+	python3 -m uv run ruff check --fix .
 
 .PHONY: commit
-commit:  ## Auto-format code (Python example)
-	uvx --from commitizen cz c
+commit: ## make commit using commitizen
+	python3 -m uv run cz c
+
+.PHONY: push
+push: ## make commit using commitizen
+	git add . && make commit && git push
 
 ## ---------- Testing ----------
 

@@ -6,6 +6,7 @@ from app.core.config import settings
 from app.schemas.prompt import PromptVariables
 from app.core.logging_config import setup_logging
 from fastapi import HTTPException
+
 logger = setup_logging()
 
 class PromptStore(ABC):
@@ -59,7 +60,7 @@ class StaticPromptStore(PromptStore):
 
     async def format_prompt(self, prompt_name: str, variables: PromptVariables) -> str:
         if prompt_name not in self.stored_prompts:
-            raise ValueError(f"Prompt {prompt_name} not found")
+            raise HTTPException(status_code=404, detail=f"Prompt {prompt_name} not found")
 
         prompt_info = self.stored_prompts[prompt_name]
         try:
@@ -81,12 +82,15 @@ class StaticPromptStore(PromptStore):
         except KeyError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
-    async def get_prompts(self) -> list[str]:
+    async def get_prompts(self, category: str | None = None) -> list[str]:
         keys_to_keep = {"metadata", "input_variables", "partial_variables"}
+        filtered = self.stored_prompts
+        if category:
+            filtered = {key:value for key, value in self.stored_prompts.items() if value.get("metadata", {}).get("category") == category}
         filtered_data = {
-    key: {k: v for k, v in value.items() if k in keys_to_keep}
-    for key, value in self.stored_prompts.items()
-}
+            key: {k: v for k, v in value.items() if k in keys_to_keep}
+            for key, value in filtered.items()
+        }
         return filtered_data
 
 promptStore = StaticPromptStore(settings.prompt_hub_directory)

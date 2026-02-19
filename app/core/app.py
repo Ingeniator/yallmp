@@ -5,13 +5,35 @@ from app.core.logging_config import setup_logging
 from app.middlewares.logging_middleware import LoggingMiddleware
 from app.middlewares.metrics_middleware import PrometheusMiddleware, metrics
 from app.schemas.health import HealthCheck
+from app.schemas.prompt import ChainMetadataForTracking, ChainType
+from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 
 logger = setup_logging()
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    client = None
+    if settings.proxy_enabled:
+        from app.core.proxy import create_async_client
+        client = await create_async_client()
+    
+    app.state.client = client
+    yield
+    if app.state.client:
+        await app.state.client.aclose()
+
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
-    app = FastAPI(title=settings.app_name, debug=settings.debug)
+    app = FastAPI(title=settings.app_name, debug=settings.debug, root_path=settings.root_path, lifespan=lifespan)
 
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.allowed_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     # Add Logging Middleware
     app.add_middleware(LoggingMiddleware)
     # Add Prometheus middleware
@@ -26,7 +48,7 @@ def create_app() -> FastAPI:
     async def health_check() -> HealthCheck:
         """Check the health of the service and its components."""
         components = {
-            "proxy": "ok" if settings.raw_proxy_llm_enabled else "disabled",
+            "proxy": "ok" if settings.proxy_enabled else "disabled",
             "chain_hub": "ok" if settings.chain_hub_enabled else "disabled",
             "prompt_hub": "ok" if settings.prompt_hub_enabled else "disabled"
         }
@@ -39,32 +61,48 @@ def create_app() -> FastAPI:
             version=settings.version
         )
 
-    if settings.raw_proxy_llm_enabled:
-        from app.core.proxy import proxy_request_with_retries
+    if settings.proxy_enabled:
+        from app.core.proxy import proxy_request_with_retries, get_model_version
         from app.services.llm_authentication import get_authorization_headers
-        @app.api_route("/proxy/{full_path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
-        async def proxy_request(full_path: str, request: Request, custom_headers: dict[str, str] = Depends(get_authorization_headers)):
-            return await proxy_request_with_retries(full_path, request, custom_headers)
+        
+        async def add_authz_header():
+            return await get_authorization_headers(app.state.client)
+
+        @app.api_route("/llm/version", methods=["GET"])
+        async def get_llm_version(request: Request, custom_headers: dict[str, str] = Depends(add_authz_header), model_name: str = "GigaChat"):
+            return await get_model_version(model_name, app.state.client, request, custom_headers)
+        
+        @app.api_route("/llm/{full_path:path}", methods=["GET", "POST"])
+        async def proxy_request(full_path: str, request: Request, custom_headers: dict[str, str] = Depends(add_authz_header)):
+            return await proxy_request_with_retries(app.state.client, full_path, request, custom_headers)
 
     if settings.prompt_hub_enabled:
         from app.services.prompt_manager import promptStore, PromptVariables
         @app.get("/prompts")
-        async def get_prompts():
-            return await promptStore.get_prompts()
+        async def get_prompts(category: str | None = None):
+            return await promptStore.get_prompts(category)
 
-        @app.post("/prompt/{name}")
+        @app.post("/prompt/format/{name}")
         async def format_prompt(name: str, data: PromptVariables):
             return await promptStore.format_prompt(name, data)
 
     if settings.chain_hub_enabled:
         from app.services.chain_manager import chainStore, PromptVariables
         @app.get("/chains")
-        async def get_chains():
-            return await chainStore.get_chains()
+        async def get_chains(category: str | None = None):
+            return await chainStore.get_chains(category)
 
-        @app.post("/chain/{name}")
-        async def chain_execute(name: str, data: PromptVariables):
-            return await chainStore.execute(name, data)
+        @app.post("/chain/execute/{name}")
+        async def chain_execute(request: Request, name: str, data: PromptVariables, model_name: str = None):
+            metadata = ChainMetadataForTracking(chain_type=ChainType.chain, chain_name = name, group_id = request.headers.get("x-group-id", "unknown"))
+            return await chainStore.execute(name, data, model_name, metadata)
+    
+    if settings.prompt_hub_enabled and settings.chain_hub_enabled:
+        @app.post("/prompt/execute/{name}")
+        async def execute_prompt(request: Request, name: str, data: PromptVariables, model_name: str = None):
+            prompt = await promptStore.format_prompt(name, data)
+            metadata = ChainMetadataForTracking(chain_type=ChainType.prompt, chain_name = name, group_id = request.headers.get("x-group-id", "unknown"))
+            return await chainStore.execute_prompt(prompt=prompt, model_name=model_name, metadata=metadata)
 
     @app.on_event("startup")
     async def startup_event():
