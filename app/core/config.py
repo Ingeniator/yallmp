@@ -9,11 +9,11 @@ class AppSettings(BaseSettings):
     workers: int = 1
     timeout_keep_alive: int = 600
     proxy_connect_timeout: int = 10
-    proxy_read_timeout: int = 60
+    proxy_read_timeout: int = 300
     proxy_write_timeout: int = 30
     proxy_pool_timeout: int|None = None
-    max_connections: int = 20  # Maximum simultaneous connections
-    max_keepalive_connections: int = 10  # Keepalive connections
+    max_connections: int = 100  # Maximum simultaneous connections
+    max_keepalive_connections: int = 20  # Keepalive connections
     host: str = "0.0.0.0"
     port: int = 5000
     allowed_origins: list[str] = ["*"]
