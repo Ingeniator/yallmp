@@ -23,3 +23,4 @@ tests/load/report.json
 .gitignore
 tests/load/report.html
 .snapshot.txt
+uv.lock

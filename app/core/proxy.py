@@ -235,6 +235,8 @@ async def get_model_version(model_name: str, client: AsyncClient, request: Reque
 
 async def proxy_request_with_retries(client: AsyncClient, path: str, request: Request, custom_headers: dict[str, str] = {}):
     target_url = f"{settings.proxy_target_url}/{path}"
+    if request.url.query:
+        target_url = f"{target_url}?{request.url.query}"
     method = request.method
     headers = dict(request.headers)
     logger.debug(f"original headers {redact_headers(headers)}")
