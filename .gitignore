@@ -22,3 +22,4 @@ data/prompt_hub/instruction_summarization.json
 tests/load/report.json
 .gitignore
 tests/load/report.html
+.snapshot.txt

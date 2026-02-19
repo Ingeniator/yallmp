@@ -1,7 +1,7 @@
 
 from app.core.logging_config import setup_logging
 from prometheus_client import Counter
-from langchain.callbacks.base import BaseCallbackHandler
+from langchain_core.callbacks.base import BaseCallbackHandler
 from app.schemas.prompt import ChainMetadataForTracking
 
 logger = setup_logging()

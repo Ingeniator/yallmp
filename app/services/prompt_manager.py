@@ -1,7 +1,7 @@
 import json
 import os
 from abc import ABC, abstractmethod
-from langchain.prompts import PromptTemplate
+from langchain_core.prompts import PromptTemplate
 from app.core.config import settings
 from app.schemas.prompt import PromptVariables
 from app.core.logging_config import setup_logging

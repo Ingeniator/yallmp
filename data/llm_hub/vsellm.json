@@ -1,0 +1,9 @@
+{
+    "lc": 1,
+    "type": "constructor",
+    "id": ["langchain", "chat_models", "openai", "ChatOpenAI"],
+    "kwargs": {
+        "openai_api_key": "{{env.LLM_OPENROUTER_API_KEY}}",
+        "openai_api_base": "https://openrouter.com/v1"
+    }
+}
