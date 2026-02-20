@@ -1,16 +1,5 @@
 config:
-  target: "{{ $env.HOSTNAME }}"
-  variables:
-    realm:
-      - "tagme-public"
-    client_id:
-      - "tagme"
-    username:
-      - "{{ $env.USER}}"
-    password:
-      - "{{ $env.PASS}}"
-    organization:
-     - "{{ $env.ORG_ID}}"
+  target: "http://localhost:5000"
   tls:
     rejectUnauthorized: false
   plugins:
@@ -53,9 +42,6 @@ config:
         metrics-by-endpoint:
           useOnlyRequestNames: true
     peak:
-      # Warm up: 5 → 10 RPS over 1 minute
-      # Ramp up: 10 → 50 RPS over 1 minute
-      # Sustained: 50 RPS for 2 minutes
       phases:
         - duration: 60
           arrivalRate: 5
@@ -74,20 +60,6 @@ config:
           - "http.response_time.p99": 5000
         conditions:
           - expression: "http.codes.200 / http.requests > 0.90"
-before:
-  flow:
-    - log: 'Get auth token'
-    - post:
-        url: '/auth/realms/{{realm}}/protocol/openid-connect/token'
-        headers:
-          Organization-Id: "{{organization}}"
-          Content-Type: "application/x-www-form-urlencoded"
-        body: 'grant_type=password&client_id={{client_id}}&username={{username}}&password={{password}}'
-        expect:
-          - statusCode: 200
-        capture:
-          - json: $.access_token
-            as: token
 scenarios:
   - name: "health check"
     weight: 1
@@ -102,8 +74,6 @@ scenarios:
     flow:
       - get:
           url: "/ai/llm/v1/models"
-          headers:
-            Authorization: "Bearer {{ token }}"
           expect:
             - statusCode: 200
             - hasProperty: "data"
@@ -114,7 +84,6 @@ scenarios:
       - post:
           url: "/ai/llm/v1/chat/completions"
           headers:
-            Authorization: "Bearer {{ token }}"
             Content-Type: "application/json"
           json:
             model: "gpt-4o-mini"
@@ -133,7 +102,6 @@ scenarios:
       - post:
           url: "/ai/llm/v1/embeddings"
           headers:
-            Authorization: "Bearer {{ token }}"
             Content-Type: "application/json"
           json:
             model: "text-embedding-ada-002"
@@ -148,8 +116,6 @@ scenarios:
     flow:
       - post:
           url: "/ai/llm/v1/files"
-          headers:
-            Authorization: "Bearer {{ token }}"
           contentType: "multipart/form-data"
           formData:
             file: "@{{ $env.FILE_PATH }}"
