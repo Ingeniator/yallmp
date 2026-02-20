@@ -48,3 +48,25 @@ def test_chunked_post_skipped():
         headers={"transfer-encoding": "chunked", "content-type": "application/json"},
     )
     assert resp.status_code == 200
+
+
+def test_debug_logging_branches():
+    """When logger is at DEBUG level, request body and response body are logged."""
+    from unittest.mock import patch, MagicMock
+    import logging
+
+    mock_logger = MagicMock()
+    mock_logger.isEnabledFor = MagicMock(return_value=True)
+
+    with patch("app.middlewares.logging_middleware.logger", mock_logger):
+        app = _make_app()
+        client = TestClient(app)
+        resp = client.get("/")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}
+    # Verify debug was called for both request and response
+    debug_calls = [c for c in mock_logger.debug.call_args_list]
+    call_messages = [c[0][0] for c in debug_calls]
+    assert "Incoming Request" in call_messages
+    assert "Outgoing Response" in call_messages

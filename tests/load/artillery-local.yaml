@@ -1,7 +1,5 @@
 config:
   target: "http://localhost:5000"
-  tls:
-    rejectUnauthorized: false
   plugins:
     ensure: {}
   ensure:
@@ -54,6 +52,9 @@ config:
         - duration: 120
           arrivalRate: 50
           name: Sustained peak load
+      plugins:
+        metrics-by-endpoint:
+          useOnlyRequestNames: true
       ensure:
         thresholds:
           - "http.response_time.p95": 2000
@@ -83,8 +84,6 @@ scenarios:
     flow:
       - post:
           url: "/ai/llm/v1/chat/completions"
-          headers:
-            Content-Type: "application/json"
           json:
             model: "gpt-4o-mini"
             messages:
@@ -101,8 +100,6 @@ scenarios:
     flow:
       - post:
           url: "/ai/llm/v1/embeddings"
-          headers:
-            Content-Type: "application/json"
           json:
             model: "text-embedding-ada-002"
             input: "Load test sample text for embeddings."

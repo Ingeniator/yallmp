@@ -143,3 +143,22 @@ async def test_connect_error_handled():
 
     assert isinstance(result, JSONResponse)
     assert result.status_code == 523
+
+
+@pytest.mark.asyncio
+async def test_request_error_handled():
+    req = HTTPXRequest("GET", "http://test")
+    func = AsyncMock(side_effect=RequestError("read timeout", request=req))
+
+    with patch.object(proxy_mod, "settings") as s:
+        s.proxy_max_retries = 0
+        s.proxy_base_delay = 0
+        s.proxy_backoff_factor = 1
+        s.proxy_failure_threshold = 0
+        s.proxy_window_size = 60
+        s.proxy_recovery_time = 30
+
+        result = await proxy_mod.exponential_backoff_retry(func)
+
+    assert isinstance(result, JSONResponse)
+    assert result.status_code == 523

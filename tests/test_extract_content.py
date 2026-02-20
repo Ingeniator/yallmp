@@ -1,4 +1,5 @@
 import json
+import pytest
 from fastapi.responses import JSONResponse
 from httpx import Response as HTTPXResponse, Request as HTTPXRequest
 
@@ -27,6 +28,30 @@ def test_httpx_response_with_text():
 def test_json_response():
     resp = JSONResponse(content={"result": 42}, status_code=200)
     assert extract_content(resp) == {"result": 42}
+
+
+def test_httpx_response_raise_exception():
+    """When raiseException=True and both json() and text fail, exception propagates."""
+    from unittest.mock import PropertyMock, patch
+
+    resp = HTTPXResponse(
+        status_code=200,
+        content=b"not json",
+        request=HTTPXRequest("GET", "http://test"),
+    )
+    # .json() fails (not valid JSON), then patch .text to also raise
+    with patch.object(HTTPXResponse, "text", new_callable=PropertyMock, side_effect=RuntimeError("decode fail")):
+        with pytest.raises(RuntimeError, match="decode fail"):
+            extract_content(resp, raiseException=True)
+
+
+def test_json_response_raise_exception():
+    """When raiseException=True and body parsing fails, exception propagates."""
+    resp = JSONResponse(content={"a": 1})
+    resp.body = b"not json"
+
+    with pytest.raises(Exception):
+        extract_content(resp, raiseException=True)
 
 
 def test_unknown_type_returns_fallback():
