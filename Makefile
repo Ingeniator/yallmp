@@ -103,11 +103,11 @@ push: ## make commit using commitizen
 
 .PHONY: test
 test:  ## Run tests
-	pytest
+	python3 -m uv run pytest tests/ -v
 
 .PHONY: test-coverage
 test-coverage:  ## Run tests with coverage report
-	pytest --cov=.
+	python3 -m uv run pytest tests/ --cov=app --cov-report=term-missing
 
 ## ---------- Deployment ----------
 

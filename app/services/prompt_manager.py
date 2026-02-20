@@ -26,10 +26,10 @@ class PromptStore(ABC):
         """
         pass
     
-    async def get_prompts(self) -> list[str]:
-        """Get a list of all available prompts.
+    async def get_prompts(self) -> dict:
+        """Get all available prompts.
         Returns:
-            List of prompt names
+            Dict of prompt names to prompt info
         """
         pass
 
@@ -53,10 +53,14 @@ class StaticPromptStore(PromptStore):
         for filename in os.listdir(self.prompts_directory):
             if filename.endswith('.json'):
                 prompt_path = os.path.join(self.prompts_directory, filename)
-                with open(prompt_path, 'r') as f:
-                    prompt_data = json.load(f)
-                    prompt_name = os.path.splitext(filename)[0]
-                    self.stored_prompts[prompt_name] = prompt_data
+                try:
+                    with open(prompt_path, 'r') as f:
+                        prompt_data = json.load(f)
+                except (json.JSONDecodeError, OSError) as e:
+                    logger.error(f"Failed to load prompt file {filename}: {e}")
+                    continue
+                prompt_name = os.path.splitext(filename)[0]
+                self.stored_prompts[prompt_name] = prompt_data
 
     async def format_prompt(self, prompt_name: str, variables: PromptVariables) -> str:
         if prompt_name not in self.stored_prompts:
@@ -82,7 +86,7 @@ class StaticPromptStore(PromptStore):
         except KeyError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
-    async def get_prompts(self, category: str | None = None) -> list[str]:
+    async def get_prompts(self, category: str | None = None) -> dict:
         keys_to_keep = {"metadata", "input_variables", "partial_variables"}
         filtered = self.stored_prompts
         if category:

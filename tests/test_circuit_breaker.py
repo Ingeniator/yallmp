@@ -1,9 +1,11 @@
 import pytest
+import time
 from unittest.mock import AsyncMock, patch, MagicMock
 from httpx import Response as HTTPXResponse, Request as HTTPXRequest, ConnectError, RequestError
 from fastapi.responses import JSONResponse
 
 import app.core.proxy as proxy_mod
+from app.core.proxy import CircuitBreaker
 
 
 def _ok_response():
@@ -24,15 +26,13 @@ def _error_response(status_code):
 
 @pytest.fixture(autouse=True)
 def _reset_circuit():
-    """Reset circuit breaker global state before each test."""
-    proxy_mod.circuit_open = False
-    proxy_mod.circuit_open_time = 0
-    proxy_mod.failure_timestamps.clear()
+    """Reset circuit breaker state before each test."""
+    proxy_mod.circuit_breaker = CircuitBreaker()
 
 
 @pytest.mark.asyncio
 async def test_successful_request_clears_failures():
-    proxy_mod.failure_timestamps.append(1.0)
+    proxy_mod.circuit_breaker.failure_timestamps.append(1.0)
     func = AsyncMock(return_value=_ok_response())
 
     with patch.object(proxy_mod, "settings") as s:
@@ -47,7 +47,7 @@ async def test_successful_request_clears_failures():
 
     assert isinstance(result, HTTPXResponse)
     assert result.status_code == 200
-    assert proxy_mod.failure_timestamps == []
+    assert proxy_mod.circuit_breaker.failure_timestamps == []
 
 
 @pytest.mark.asyncio
@@ -107,14 +107,13 @@ async def test_circuit_breaker_activates():
 
     assert isinstance(result, JSONResponse)
     assert result.status_code == 503
-    assert proxy_mod.circuit_open is True
+    assert proxy_mod.circuit_breaker.is_open is True
 
 
 @pytest.mark.asyncio
 async def test_circuit_breaker_returns_503_while_open():
-    proxy_mod.circuit_open = True
-    import time
-    proxy_mod.circuit_open_time = time.time()
+    proxy_mod.circuit_breaker.is_open = True
+    proxy_mod.circuit_breaker.open_time = time.time()
     func = AsyncMock()
 
     with patch.object(proxy_mod, "settings") as s:

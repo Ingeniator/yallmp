@@ -34,7 +34,7 @@ class AppSettings(BaseSettings):
 
     # Proxy
     proxy_exclude_headers: str = "host,authorization,cookie,x-forwarded-*,jwt-*"
-    proxy_verify_ssl: bool = False
+    proxy_verify_ssl: bool = True
     proxy_ca_bundle_path: str | None = None
     proxy_target_url: str = "http://localhost:8001"  # Target backend server to forward requests
     proxy_authorization_type: str = "BEARER"
@@ -51,7 +51,7 @@ class AppSettings(BaseSettings):
     proxy_base_delay: float = 0.5  # Base delay in seconds
     proxy_backoff_factor: float = 2.0  # Exponential backoff multiplier
     # Circuit breaker configuration
-    proxy_failure_threshold: int = 0  # 0 if circuid breaker disabled. Number of failures before tripping
+    proxy_failure_threshold: int = 0  # 0 if circuit breaker disabled. Number of failures before tripping
     proxy_recovery_time: int = 30  # Cooldown period (seconds)
     proxy_window_size: int = 60  # Sliding window size in seconds
 
@@ -60,7 +60,7 @@ class AppSettings(BaseSettings):
 
     # Chain hub settings
     chain_hub_directory: str = "data/chain_hub"
-    chain_default_base_url: str= ""
+    chain_default_base_url: str = ""
     chain_default_model_name: str = ""
     chain_default_ca_bundle_file: str = ""
     chain_default_verify_ssl_certs: bool = False

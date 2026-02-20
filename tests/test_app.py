@@ -21,7 +21,7 @@ def test_health_all_disabled():
         resp = client.get("/health")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["status"] == "degraded"
+        assert data["status"] == "ok"
         assert data["version"] == "0.0.1-test"
         assert data["components"]["proxy"] == "disabled"
 

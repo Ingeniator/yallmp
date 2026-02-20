@@ -6,12 +6,13 @@ from app.core.config import settings
 
 logger = setup_logging()
 
+
 class OIDCTokenManager:
     def __init__(self, authorization_url, credentials):
         self.authorization_url = authorization_url
         self.credentials = credentials
         self.token = None
-        self.expires_at = 0  # Timestamp when the token expires
+        self.expires_at = 0  # Timestamp in milliseconds when the token expires
 
     async def fetch_token(self, client: AsyncClient):
         """Fetch a new access token using client credentials grant."""
@@ -28,17 +29,21 @@ class OIDCTokenManager:
         )
         response.raise_for_status()
         data = response.json()
-        self.token = data.get("access_token", data.get("tok", ""))
-        self.expires_at = data.get("expires_at", data.get("exp", "")) - 20*1000  # Refresh slightly before expiration 20s before
-        logger.debug(self.expires_at)
-    
+        self.token = data.get("access_token") or data.get("tok")
+        if not self.token:
+            raise ValueError("Token response missing 'access_token' and 'tok' fields")
+
+        # expires_at / exp are expected in milliseconds
+        expires_at = data.get("expires_at") or data.get("exp")
+        if expires_at is None:
+            raise ValueError("Token response missing 'expires_at' and 'exp' fields")
+        self.expires_at = int(expires_at) - 20_000  # Refresh 20s before expiration
+        logger.debug(f"Token expires_at (ms): {self.expires_at}")
+
     async def get_token(self, client: AsyncClient):
         """Ensure the token is fresh and return it."""
-        if not self.token or time.time()* 1000 >= self.expires_at:
+        now_ms = int(time.time() * 1000)
+        if not self.token or now_ms >= self.expires_at:
             logger.debug("time to refresh token")
-            try:
-                await self.fetch_token(client)
-            except Exception as e:
-                logger.error(f"Error fetching token: {type(e).__name__}")
-                return "Error fetching token"
+            await self.fetch_token(client)
         return self.token

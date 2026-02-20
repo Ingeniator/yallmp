@@ -32,11 +32,11 @@ class ChainStore(ABC):
         """
         pass
     
-    async def get_chains(self) -> list[str]:
-        """Get a list of all available chains.
+    async def get_chains(self) -> dict:
+        """Get all available chains.
 
         Returns:
-            List of chain names
+            Dict of chain names to chain info
         """
         pass
 
@@ -104,9 +104,13 @@ class StaticChainStore(ChainStore):
 
         for filename in os.listdir(self.chains_directory):
             if filename.endswith('.json'):
-                with open(os.path.join(self.chains_directory, filename), 'r') as f:
-                    chain_data = json.load(f)
                 chain_path = os.path.join(self.chains_directory, filename)
+                try:
+                    with open(chain_path, 'r') as f:
+                        chain_data = json.load(f)
+                except (json.JSONDecodeError, OSError) as e:
+                    logger.error(f"Failed to load chain file {filename}: {e}")
+                    continue
                 chain_name = os.path.splitext(filename)[0]
                 chain_info = {
                     "path": chain_path,
@@ -148,24 +152,25 @@ class StaticChainStore(ChainStore):
             self.default_available_chat_models.remove(exclude)
         return self.default_available_chat_models
 
-    async def execute_chain(self, chain: LLMChain, model_name: str | None = None, variables: dict = {}, metadata: ChainMetadataForTracking | None = None) -> str:
+    async def execute_chain(self, chain: LLMChain, model_name: str | None = None, variables: dict | None = None, metadata: ChainMetadataForTracking | None = None) -> str:
+        variables = variables or {}
         # chain patching
         if not chain.llm.timeout:
             chain.llm.timeout = settings.timeout_keep_alive
         # set base url if it's not defined
         if not chain.llm.base_url and settings.chain_default_base_url:
             chain.llm.base_url = settings.chain_default_base_url
-        # set base madel if it's not defined
+        # set base model if it's not defined
         if not chain.llm.model and settings.chain_default_model_name:
             chain.llm.model = settings.chain_default_model_name
         # override model if needed
-        if model_name and chain.llm.model:
+        if model_name:
             chain.llm.model = model_name
 
         if not chain.llm.ca_bundle_file and settings.chain_default_ca_bundle_file:
             chain.llm.ca_bundle_file = settings.chain_default_ca_bundle_file
 
-        if not chain.llm.cert_file  and settings.chain_default_cert_file and \
+        if not chain.llm.cert_file and settings.chain_default_cert_file and \
             not chain.llm.key_file and settings.chain_default_key_file:
             chain.llm.cert_file = settings.chain_default_cert_file
             chain.llm.key_file = settings.chain_default_key_file
@@ -177,16 +182,15 @@ class StaticChainStore(ChainStore):
 
         metrics_handler = MetricsCallbackHandler(metadata=metadata)
 
-        fallback_count = 1
-        while fallback_count > 0:
+        max_fallbacks = len(self.default_available_chat_models)
+        for attempt in range(max_fallbacks + 1):
             try:
                 return await chain.ainvoke(variables, config={"callbacks": [metrics_handler]})
             except Exception as e:
-                responseError = safe_parse_gigachat_exception(e)
-                # General request failure details
+                response_error = safe_parse_gigachat_exception(e)
                 error_response = {
                     "error": {
-                        "message": responseError["message"] or "Chain execution failed",
+                        "message": response_error["message"] or "Chain execution failed",
                         "details": {
                             "exception": str(e),
                             "exception_type": type(e).__name__
@@ -194,22 +198,26 @@ class StaticChainStore(ChainStore):
                     }
                 }
                 logger.warning("Chain execution failed", details=error_response)
-                if responseError["status_code"] == 404 and "No such model" in responseError["message"]:
-                    # let's try other model
+                status_code = response_error.get("status_code")
+                message = response_error.get("message", "")
+                is_model_not_found = (
+                    status_code == 404
+                    and isinstance(message, str)
+                    and "No such model" in message
+                )
+                if is_model_not_found:
                     logger.warning(f"404: No such model. {chain.llm.model}")
                     chat_models = await self.get_default_available_chat_models(exclude=chain.llm.model)
-                    fallback_count = len(chat_models)
-                    if fallback_count == 0:
-                        return JSONResponse(content={"error": "Chain execution failed", "details": error_response}, status_code=responseError["status_code"] or  500)
-                    else:
-                        chain.llm.model = chat_models[0]
-                        logger.warning(f"Fallback: Let's try this one - {chain.llm.model}")
+                    if not chat_models:
+                        return JSONResponse(content={"error": "Chain execution failed", "details": error_response}, status_code=status_code or 500)
+                    chain.llm.model = chat_models[0]
+                    logger.warning(f"Fallback: Let's try this one - {chain.llm.model}")
                 else:
-                    return JSONResponse(content={"error": "Chain execution failed", "details": error_response}, status_code=responseError["status_code"] or  500)
-        return JSONResponse(content={"error": "No llm models available"}, status_code=404)        
+                    return JSONResponse(content={"error": "Chain execution failed", "details": error_response}, status_code=status_code or 500)
+        return JSONResponse(content={"error": "No llm models available"}, status_code=404)
 
 
-    async def get_chains(self, category: str | None = None) -> list[str]:
+    async def get_chains(self, category: str | None = None) -> dict:
         keys_to_keep = {"model", "metadata", "input_variables", "partial_variables"}
         filtered = self.stored_chains
         if category:

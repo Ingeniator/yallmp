@@ -62,5 +62,5 @@ async def test_get_token_handles_fetch_error(manager):
     client = AsyncMock()
     client.post = AsyncMock(side_effect=Exception("network error"))
 
-    token = await manager.get_token(client)
-    assert token == "Error fetching token"
+    with pytest.raises(Exception, match="network error"):
+        await manager.get_token(client)

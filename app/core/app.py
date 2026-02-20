@@ -13,15 +13,17 @@ logger = setup_logging()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    logger.info("Application startup...")
     client = None
     if settings.proxy_enabled:
         from app.core.proxy import create_async_client
         client = await create_async_client()
-    
+
     app.state.client = client
     yield
     if app.state.client:
         await app.state.client.aclose()
+    logger.info("Application shutdown...")
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
@@ -53,7 +55,8 @@ def create_app() -> FastAPI:
             "prompt_hub": "ok" if settings.prompt_hub_enabled else "disabled"
         }
         
-        status = "ok" if all(v == "ok" for v in components.values()) else "degraded"
+        enabled = {k: v for k, v in components.items() if v != "disabled"}
+        status = "ok" if all(v == "ok" for v in enabled.values()) else "degraded"
         
         return HealthCheck(
             status=status,
@@ -103,13 +106,5 @@ def create_app() -> FastAPI:
             prompt = await promptStore.format_prompt(name, data)
             metadata = ChainMetadataForTracking(chain_type=ChainType.prompt, chain_name = name, group_id = request.headers.get("x-group-id", "unknown"))
             return await chainStore.execute_prompt(prompt=prompt, model_name=model_name, metadata=metadata)
-
-    @app.on_event("startup")
-    async def startup_event():
-        logger.info("Application startup...")
-
-    @app.on_event("shutdown")
-    async def shutdown_event():
-        logger.info("Application shutdown...")
 
     return app
