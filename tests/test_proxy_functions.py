@@ -1,4 +1,5 @@
 import pytest
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, patch, MagicMock
 from httpx import Response as HTTPXResponse, Request as HTTPXRequest, AsyncClient
 from fastapi.responses import JSONResponse
@@ -9,6 +10,8 @@ from app.core.proxy import (
     _parse_model_version,
     get_model_version,
     proxy_request_with_retries,
+    stream_multipart_post,
+    RequestStreamWrapper,
     create_async_client,
     get_circuit_status,
     CircuitBreaker,
@@ -261,3 +264,170 @@ async def test_proxy_request_exception():
 
     assert isinstance(result, JSONResponse)
     assert result.status_code == 500
+
+
+# --- RequestStreamWrapper ---
+
+
+@pytest.mark.asyncio
+async def test_request_stream_wrapper():
+    async def fake_stream():
+        yield b"chunk1"
+        yield b"chunk2"
+
+    mock_request = MagicMock()
+    mock_request.stream.return_value = fake_stream()
+
+    wrapper = RequestStreamWrapper(mock_request)
+    chunks = [chunk async for chunk in wrapper]
+    assert chunks == [b"chunk1", b"chunk2"]
+
+
+# --- stream_multipart_post ---
+
+
+def _mock_stream_client(status_code=200, body=b'{"ok": true}'):
+    """Create a mock AsyncClient whose .stream() is an async context manager."""
+    mock_response = MagicMock()
+    mock_response.status_code = status_code
+    mock_response.aread = AsyncMock(return_value=body)
+
+    @asynccontextmanager
+    async def fake_stream(**kwargs):
+        yield mock_response
+
+    mock_client = MagicMock()
+    mock_client.stream = fake_stream
+    return mock_client, mock_response
+
+
+def _mock_stream_request():
+    """Create a mock Starlette request with an async stream."""
+    async def fake_body_stream():
+        yield b"file-data"
+
+    mock_request = MagicMock()
+    mock_request.stream.return_value = fake_body_stream()
+    return mock_request
+
+
+@pytest.mark.asyncio
+async def test_stream_multipart_post_json_success():
+    """extract_content succeeds — returns parsed JSON."""
+    mock_client, _ = _mock_stream_client(200, b'{"result": "ok"}')
+
+    with patch.object(proxy_mod, "extract_content", return_value={"result": "ok"}):
+        result = await stream_multipart_post(
+            _mock_stream_request(), mock_client,
+            "http://upstream/upload",
+            {"content-type": "multipart/form-data", "accept": "application/json"},
+        )
+
+    assert isinstance(result, JSONResponse)
+    assert result.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_stream_multipart_post_fallback_to_body():
+    """extract_content raises, but json.loads(body) succeeds."""
+    mock_client, _ = _mock_stream_client(200, b'{"fallback": true}')
+
+    with patch.object(proxy_mod, "extract_content", side_effect=ValueError("parse failed")):
+        result = await stream_multipart_post(
+            _mock_stream_request(), mock_client,
+            "http://upstream/upload",
+            {"content-type": "multipart/form-data"},
+        )
+
+    assert isinstance(result, JSONResponse)
+    assert result.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_stream_multipart_post_invalid_json():
+    """Both extract_content and json.loads fail — returns error fallback."""
+    mock_client, _ = _mock_stream_client(200, b"not json at all")
+
+    with patch.object(proxy_mod, "extract_content", side_effect=ValueError("parse failed")):
+        result = await stream_multipart_post(
+            _mock_stream_request(), mock_client,
+            "http://upstream/upload",
+            {"content-type": "multipart/form-data"},
+        )
+
+    assert isinstance(result, JSONResponse)
+    assert result.status_code == 200
+    import json
+    body = json.loads(result.body)
+    assert body == {"error": "Invalid JSON response"}
+
+
+@pytest.mark.asyncio
+async def test_stream_multipart_post_filters_headers():
+    """Hop-by-hop headers (content-length, transfer-encoding, etc.) are stripped."""
+    mock_client, _ = _mock_stream_client()
+    captured_kwargs = {}
+
+    @asynccontextmanager
+    async def capturing_stream(**kwargs):
+        captured_kwargs.update(kwargs)
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.aread = AsyncMock(return_value=b'{}')
+        yield mock_resp
+
+    mock_client.stream = capturing_stream
+
+    headers = {
+        "content-type": "multipart/form-data",
+        "content-length": "123",
+        "transfer-encoding": "chunked",
+        "connection": "keep-alive",
+        "expect": "100-continue",
+        "host": "localhost",
+        "x-custom": "keep-me",
+    }
+
+    with patch.object(proxy_mod, "extract_content", return_value={}):
+        await stream_multipart_post(
+            _mock_stream_request(), mock_client,
+            "http://upstream/upload", headers,
+        )
+
+    forwarded = captured_kwargs["headers"]
+    assert "x-custom" in forwarded
+    for excluded in ("content-length", "transfer-encoding", "connection", "expect", "host"):
+        assert excluded not in forwarded
+
+
+# --- proxy_request_with_retries: multipart branch ---
+
+
+@pytest.mark.asyncio
+async def test_proxy_request_multipart_delegates_to_stream():
+    """POST with multipart/form-data delegates to stream_multipart_post."""
+    expected = JSONResponse(content={"uploaded": True}, status_code=200)
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/llm/v1/upload",
+        "query_string": b"",
+        "headers": [
+            (b"content-type", b"multipart/form-data; boundary=abc"),
+            (b"accept", b"application/json"),
+        ],
+        "root_path": "",
+    }
+    request = Request(scope, receive=AsyncMock(return_value={"type": "http.request", "body": b""}))
+
+    mock_client = AsyncMock(spec=AsyncClient)
+
+    with _patch_settings(), \
+         patch.object(proxy_mod, "stream_multipart_post", AsyncMock(return_value=expected)) as mock_stream:
+        result = await proxy_request_with_retries(
+            mock_client, "v1/upload", request, {},
+        )
+
+    assert result is expected
+    mock_stream.assert_awaited_once()

@@ -47,7 +47,9 @@ class LoggingMiddleware(BaseHTTPMiddleware):
 
         process_time = time.time() - start_time
 
-        if logger.isEnabledFor(logging.DEBUG):
+        if response.media_type == "text/event-stream":
+            logger.info("Streaming response", status_code=response.status_code, process_time=f"{process_time:.4f}s")
+        elif logger.isEnabledFor(logging.DEBUG):
             # Only consume response body for DEBUG logging
             response_body = b""
             async for chunk in response.body_iterator:

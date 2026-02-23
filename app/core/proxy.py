@@ -1,5 +1,6 @@
 from fastapi import Request
 from fastapi.responses import JSONResponse
+from starlette.responses import StreamingResponse
 from httpx import AsyncClient, ConnectError, RequestError, Timeout, Limits, Response as HTTPXResponse, AsyncByteStream
 import random
 import time
@@ -303,11 +304,27 @@ async def proxy_request_with_retries(client: AsyncClient, path: str, request: Re
         if method.lower() == "post" and headers.get("content-type", "").lower().startswith("multipart/form-data"):
             response = await stream_multipart_post(request, client, target_url, headers=headers)
             return response
-        else:
-            body = await request.body()
-            response = await exponential_backoff_retry(
-                client.request, method, target_url, headers=headers, content=body
+
+        body = await request.body()
+
+        # Detect streaming requests (e.g. POST /completions with "stream": true)
+        is_streaming = False
+        if method.lower() == "post" and body:
+            try:
+                body_json = json.loads(body)
+                is_streaming = body_json.get("stream") is True
+            except (json.JSONDecodeError, AttributeError):
+                pass
+
+        if is_streaming:
+            return await _handle_streaming_request(
+                client=client, target_url=target_url, headers=headers,
+                body=body, path=path, request=request,
             )
+
+        response = await exponential_backoff_retry(
+            client.request, method, target_url, headers=headers, content=body
+        )
 
         if isinstance(response, HTTPXResponse) and response.status_code in _SUCCESS_STATUS_CODES:
             logger.debug(f"Proxy request successful: {method} {target_url} -> {response.status_code}")
@@ -363,3 +380,76 @@ async def proxy_request_with_retries(client: AsyncClient, path: str, request: Re
                 "message": "Proxy request failed",
             }
         }, status_code=500)
+
+
+async def _handle_streaming_request(
+    client: AsyncClient, target_url: str, headers: dict,
+    body: bytes, path: str, request: Request,
+) -> StreamingResponse | JSONResponse:
+    """Handle a streaming proxy request, forwarding SSE chunks from upstream."""
+    try:
+        upstream_response = await client.send(
+            client.build_request("POST", target_url, headers=headers, content=body),
+            stream=True,
+        )
+    except (ConnectError, RequestError) as e:
+        logger.error("Streaming connection failed", details={
+            "target_url": target_url,
+            "exception": str(e),
+            "exception_type": type(e).__name__,
+        })
+        return JSONResponse(
+            content={"error": {"status_code": 502, "message": "Upstream connection failed"}},
+            status_code=502,
+        )
+
+    if upstream_response.status_code not in _SUCCESS_STATUS_CODES:
+        body_bytes = await upstream_response.aread()
+        await upstream_response.aclose()
+        try:
+            error_data = json.loads(body_bytes.decode("utf-8", errors="replace"))
+        except Exception:
+            error_data = {"detail": body_bytes.decode("utf-8", errors="replace")}
+        return JSONResponse(content=error_data, status_code=upstream_response.status_code)
+
+    async def _stream_generator():
+        collected_chunks: list[str] = []
+        try:
+            async for chunk in upstream_response.aiter_bytes():
+                collected_chunks.append(chunk.decode("utf-8", errors="replace"))
+                yield chunk
+        finally:
+            await upstream_response.aclose()
+            # Parse collected SSE data for metrics
+            if "completions" in path:
+                _emit_streaming_metrics(collected_chunks, request)
+
+    return StreamingResponse(
+        _stream_generator(),
+        status_code=upstream_response.status_code,
+        media_type="text/event-stream",
+    )
+
+
+def _emit_streaming_metrics(chunks: list[str], request: Request) -> None:
+    """Parse SSE chunks for usage data and emit metrics."""
+    try:
+        full_text = "".join(chunks)
+        # SSE lines look like: "data: {...}\n\n" — find the last data line before [DONE]
+        last_data = None
+        for line in full_text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("data:") and stripped != "data: [DONE]":
+                last_data = stripped[len("data:"):].strip()
+
+        if last_data:
+            last_payload = json.loads(last_data)
+            if "usage" in last_payload:
+                metadata = ChainMetadataForTracking(
+                    chain_type=ChainType.prompt,
+                    chain_name="proxy",
+                    group_id=request.headers.get("x-group-id", "unknown"),
+                )
+                MetricsCallbackHandler(metadata).on_llm_end(last_payload)
+    except Exception as e:
+        logger.error("Error processing streaming LLM usage metrics", exc_info=e)
