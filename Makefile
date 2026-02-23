@@ -72,28 +72,28 @@ snapshot-restore:
 ## ---------- Local Development ----------
 .PHONY: dev-init
 dev-init:  ## Initialize development environment
-	python3 -m uv venv
-	python3 -m uv pip install --dev
-	python3 -m uv run pre-commit install
+	uv venv
+	uv pip install --dev
+	uv run pre-commit install
 
 .PHONY: run
 run:  ## Run application
 	mkdir -p /tmp/metrics
-	python3 -m uv run entrypoint.py
+	uv run entrypoint.py
 
 .PHONY: run-fake-llm
 run-fake-llm:  ## Run fake LLM application
-	python3 -m uv run fake_llm_entrypoint.py
+	uv run fake_llm_entrypoint.py
 
 ## ---------- Code Quality ----------
 
 .PHONY: lint
 lint:  ## Run auto-formatting and linting
-	python3 -m uv run ruff check --fix .
+	uv run ruff check --fix .
 
 .PHONY: commit
 commit: ## make commit using commitizen
-	python3 -m uv run cz c
+	uv run cz c
 
 .PHONY: push
 push: ## make commit using commitizen
@@ -103,11 +103,11 @@ push: ## make commit using commitizen
 
 .PHONY: test
 test:  ## Run tests
-	python3 -m uv run pytest tests/ -v
+	uv run pytest tests/ -v
 
 .PHONY: test-coverage
 test-coverage:  ## Run tests with coverage report
-	python3 -m uv run pytest tests/ --cov=app --cov-report=term-missing
+	uv run pytest tests/ --cov=app --cov-report=term-missing
 
 ## ---------- Deployment ----------
 
