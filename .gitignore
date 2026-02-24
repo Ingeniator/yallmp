@@ -11,3 +11,17 @@ wheels/
 
 # Environment variables
 .env
+build-info.conf
+Jenkinsfile
+start.sh
+data/chain_hub/instruction_editor_deepseek.json
+data/chain_hub/instruction_summary_gigachat.json
+data/llm_hub/default.json
+data/prompt_hub/instruction_editor.json
+data/prompt_hub/instruction_summarization.json
+tests/load/report.json
+.gitignore
+tests/load/report.html
+.snapshot.txt
+uv.lock
+devops/*

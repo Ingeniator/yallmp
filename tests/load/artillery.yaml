@@ -1,0 +1,159 @@
+config:
+  target: "{{ $env.HOSTNAME }}"
+  variables:
+    realm:
+      - "tagme-public"
+    client_id:
+      - "tagme"
+    username:
+      - "{{ $env.USER}}"
+    password:
+      - "{{ $env.PASS}}"
+    organization:
+     - "{{ $env.ORG_ID}}"
+  tls:
+    rejectUnauthorized: false
+  plugins:
+    ensure: {}
+  ensure:
+    thresholds:
+      - "http.response_time.p95": 500
+    conditions:
+      - expression: "http.codes.200 / http.requests > 0.95"
+  environments:
+    functional:
+      phases:
+        - name: functional_test
+          duration: 1
+          arrivalCount: 1
+      plugins:
+        expect:
+          formatter: "pretty"
+          expectDefault200: true
+          reportFailuresAsErrors: true
+          useOnlyRequestNames: true
+      ensure:
+        thresholds:
+          - "http.response_time.p95": 300
+        conditions:
+          - expression: "http.codes.200 / http.requests > 0.99"
+    load:
+      phases:
+        - name: load_test
+          duration: 60
+          arrivalRate: 10
+      ensure:
+        thresholds:
+          - "http.response_time.p95": 700
+          - "http.response_time.p99": 2000
+        conditions:
+          - expression: "http.codes.200 / http.requests > 0.95"
+      plugins:
+        apdex: {}
+        metrics-by-endpoint:
+          useOnlyRequestNames: true
+    peak:
+      # Warm up: 5 → 10 RPS over 1 minute
+      # Ramp up: 10 → 50 RPS over 1 minute
+      # Sustained: 50 RPS for 2 minutes
+      phases:
+        - duration: 60
+          arrivalRate: 5
+          rampTo: 10
+          name: Warm up phase
+        - duration: 60
+          arrivalRate: 10
+          rampTo: 50
+          name: Ramp up to peak load
+        - duration: 120
+          arrivalRate: 50
+          name: Sustained peak load
+      plugins:
+        metrics-by-endpoint:
+          useOnlyRequestNames: true
+      ensure:
+        thresholds:
+          - "http.response_time.p95": 2000
+          - "http.response_time.p99": 5000
+        conditions:
+          - expression: "http.codes.200 / http.requests > 0.90"
+before:
+  flow:
+    - log: 'Get auth token'
+    - post:
+        url: '/auth/realms/{{realm}}/protocol/openid-connect/token'
+        headers:
+          Organization-Id: "{{organization}}"
+          Content-Type: "application/x-www-form-urlencoded"
+        body: 'grant_type=password&client_id={{client_id}}&username={{username}}&password={{password}}'
+        expect:
+          - statusCode: 200
+        capture:
+          - json: $.access_token
+            as: token
+scenarios:
+  - name: "health check"
+    weight: 1
+    flow:
+      - get:
+          url: "/health"
+          expect:
+            - statusCode: 200
+
+  - name: "list models"
+    weight: 2
+    flow:
+      - get:
+          url: "/ai/llm/v1/models"
+          headers:
+            Authorization: "Bearer {{ token }}"
+          expect:
+            - statusCode: 200
+            - hasProperty: "data"
+
+  - name: "chat completions"
+    weight: 5
+    flow:
+      - post:
+          url: "/ai/llm/v1/chat/completions"
+          headers:
+            Authorization: "Bearer {{ token }}"
+          json:
+            model: "gpt-4o-mini"
+            messages:
+              - role: "user"
+                content: "Say hello in one word."
+            max_tokens: 50
+          expect:
+            - statusCode: 200
+            - hasProperty: "choices"
+      - think: 1
+
+  - name: "embeddings"
+    weight: 2
+    flow:
+      - post:
+          url: "/ai/llm/v1/embeddings"
+          headers:
+            Authorization: "Bearer {{ token }}"
+          json:
+            model: "text-embedding-ada-002"
+            input: "Load test sample text for embeddings."
+          expect:
+            - statusCode: 200
+            - hasProperty: "data"
+      - think: 1
+
+  - name: "upload files"
+    weight: 1
+    flow:
+      - post:
+          url: "/ai/llm/v1/files"
+          headers:
+            Authorization: "Bearer {{ token }}"
+          contentType: "multipart/form-data"
+          formData:
+            file: "@{{ $env.FILE_PATH }}"
+            purpose: "general"
+          expect:
+            - statusCode: 200
