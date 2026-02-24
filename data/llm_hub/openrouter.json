@@ -1,0 +1,12 @@
+{
+    "prefix": "openrouter",
+    "base_url": "https://openrouter.com",
+    "auth": {
+        "type": "APIKEY",
+        "api_key": "${LLM_OPENROUTER_API_KEY}"
+    },
+    "models": [],
+    "verify_ssl": true,
+    "timeout": { "connect": 10, "read": 300, "write": 30 },
+    "max_retries": 3
+}

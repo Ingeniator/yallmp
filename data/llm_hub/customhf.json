@@ -1,0 +1,12 @@
+{
+    "prefix": "customhf",
+    "base_url": "https://someservice.com",
+    "auth": {
+        "type": "APIKEY",
+        "api_key": "${LLM_SOMESERVICE_API_KEY}"
+    },
+    "models": [],
+    "verify_ssl": true,
+    "timeout": { "connect": 10, "read": 300, "write": 30 },
+    "max_retries": 3
+}

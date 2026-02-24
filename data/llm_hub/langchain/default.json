@@ -1,0 +1,11 @@
+{
+    "_type": "giga-chat-model",
+    "verify_ssl_certs": false,
+    "max_tokens": 100000,
+    "streaming": false,
+    "profanity": true,
+    "temperature": 0.0,
+    "repetition_penalty": null,
+    "top_p": 1,
+    "verbose": true
+}

@@ -29,11 +29,31 @@ def _get_exclude_header_patterns() -> frozenset[str]:
 class CircuitBreaker:
     """Encapsulates circuit breaker state with proper locking."""
 
-    def __init__(self):
+    def __init__(
+        self,
+        failure_threshold: int | None = None,
+        recovery_time: int | None = None,
+        window_size: int | None = None,
+    ):
+        self._failure_threshold = failure_threshold
+        self._recovery_time = recovery_time
+        self._window_size = window_size
         self.is_open = False
         self.open_time: float = 0
         self.failure_timestamps: list[float] = []
         self._lock = asyncio.Lock()
+
+    @property
+    def failure_threshold(self) -> int:
+        return self._failure_threshold if self._failure_threshold is not None else settings.proxy_failure_threshold
+
+    @property
+    def recovery_time(self) -> int:
+        return self._recovery_time if self._recovery_time is not None else settings.proxy_recovery_time
+
+    @property
+    def window_size(self) -> int:
+        return self._window_size if self._window_size is not None else settings.proxy_window_size
 
     async def get_status(self) -> dict:
         async with self._lock:
@@ -45,7 +65,7 @@ class CircuitBreaker:
 
     async def check_open(self) -> bool:
         async with self._lock:
-            if self.is_open and time.time() - self.open_time < settings.proxy_recovery_time:
+            if self.is_open and time.time() - self.open_time < self.recovery_time:
                 return True
             return False
 
@@ -58,13 +78,13 @@ class CircuitBreaker:
         async with self._lock:
             current_time = time.time()
             self.failure_timestamps.append(current_time)
-            window_start = current_time - settings.proxy_window_size
+            window_start = current_time - self.window_size
             self.failure_timestamps[:] = [
                 ts for ts in self.failure_timestamps if ts > window_start
             ]
             if (
-                settings.proxy_failure_threshold > 0
-                and len(self.failure_timestamps) >= settings.proxy_failure_threshold
+                self.failure_threshold > 0
+                and len(self.failure_timestamps) >= self.failure_threshold
             ):
                 self.is_open = True
                 self.open_time = time.time()
@@ -94,15 +114,28 @@ async def get_circuit_status():
     return await circuit_breaker.get_status()
 
 
-async def exponential_backoff_retry(func, *args, **kwargs) -> JSONResponse | HTTPXResponse:
+async def exponential_backoff_retry(
+    func,
+    *args,
+    cb: CircuitBreaker | None = None,
+    max_retries: int | None = None,
+    base_delay: float | None = None,
+    backoff_factor: float | None = None,
+    **kwargs,
+) -> JSONResponse | HTTPXResponse:
     """Performs a request with exponential backoff on retryable errors."""
+    _cb = cb or circuit_breaker
+    _max_retries = max_retries if max_retries is not None else settings.proxy_max_retries
+    _base_delay = base_delay if base_delay is not None else settings.proxy_base_delay
+    _backoff_factor = backoff_factor if backoff_factor is not None else settings.proxy_backoff_factor
+
     last_response_status_code = 523
     error_response = ""
 
-    if await circuit_breaker.check_open():
+    if await _cb.check_open():
         return JSONResponse(content={"error": "Circuit breaker open. Try later."}, status_code=503)
 
-    attempts = 1 + settings.proxy_max_retries
+    attempts = 1 + _max_retries
     for attempt in range(attempts):
         try:
             response = await func(*args, **kwargs)
@@ -111,13 +144,13 @@ async def exponential_backoff_retry(func, *args, **kwargs) -> JSONResponse | HTT
             # Handle 429 (Too Many Requests) with Retry-After
             if response.status_code == 429:
                 retry_after = response.headers.get("Retry-After")
-                delay = int(retry_after) if retry_after else settings.proxy_base_delay * (settings.proxy_backoff_factor ** attempt) + random.uniform(0, 0.1)
+                delay = int(retry_after) if retry_after else _base_delay * (_backoff_factor ** attempt) + random.uniform(0, 0.1)
                 logger.warning(f"Rate limited. Retrying in {delay:.2f} seconds.")
                 await asyncio.sleep(delay)
                 continue
 
             if response.status_code not in {429, 500, 502, 503, 504}:
-                await circuit_breaker.record_success()
+                await _cb.record_success()
                 return response
 
         except ConnectError as e:
@@ -145,13 +178,13 @@ async def exponential_backoff_retry(func, *args, **kwargs) -> JSONResponse | HTT
             }
             logger.warning("Request failed", details=error_response)
 
-        activated = await circuit_breaker.record_failure()
+        activated = await _cb.record_failure()
         if activated:
             logger.error("Circuit breaker activated due to multiple failures.", details=error_response)
             return JSONResponse(content={"error": "Circuit breaker activated. Try later."}, status_code=503)
 
         # Exponential backoff delay
-        delay = settings.proxy_base_delay * (settings.proxy_backoff_factor ** attempt) + random.uniform(0, 0.1)
+        delay = _base_delay * (_backoff_factor ** attempt) + random.uniform(0, 0.1)
         logger.debug(f"Retrying request in {delay:.2f} seconds.")
         await asyncio.sleep(delay)
 
@@ -453,3 +486,115 @@ def _emit_streaming_metrics(chunks: list[str], request: Request) -> None:
                 MetricsCallbackHandler(metadata).on_llm_end(last_payload)
     except Exception as e:
         logger.error("Error processing streaming LLM usage metrics", exc_info=e)
+
+
+def _strip_model_prefix(body: bytes, original_model: str, stripped_model: str) -> bytes:
+    """Replace the prefixed model name in the request body with the stripped name."""
+    try:
+        body_json = json.loads(body)
+        if body_json.get("model") == original_model:
+            body_json["model"] = stripped_model
+            return json.dumps(body_json).encode("utf-8")
+    except (json.JSONDecodeError, AttributeError):
+        pass
+    return body
+
+
+async def proxy_request_to_provider(
+    provider,
+    path: str,
+    request: Request,
+    auth_headers: dict[str, str],
+    original_model: str,
+    stripped_model: str,
+):
+    """Route a request to a specific LLM provider, stripping the model prefix."""
+    config = provider.config
+    target_url = f"{config.base_url}/{path}"
+    if request.url.query:
+        target_url = f"{target_url}?{request.url.query}"
+
+    method = request.method
+    headers = dict(request.headers)
+    exclude = _get_exclude_header_patterns()
+    headers = {k: v for k, v in headers.items() if not any(fnmatch.fnmatch(k.lower(), p) for p in exclude)}
+    headers.update(auth_headers)
+    headers["accept-encoding"] = "identity"
+
+    try:
+        body = await request.body()
+        body = _strip_model_prefix(body, original_model, stripped_model)
+
+        is_streaming = False
+        if method.lower() == "post" and body:
+            try:
+                body_json = json.loads(body)
+                is_streaming = body_json.get("stream") is True
+            except (json.JSONDecodeError, AttributeError):
+                pass
+
+        if is_streaming:
+            return await _handle_streaming_request(
+                client=provider.client,
+                target_url=target_url,
+                headers=headers,
+                body=body,
+                path=path,
+                request=request,
+            )
+
+        response = await exponential_backoff_retry(
+            provider.client.request,
+            method,
+            target_url,
+            headers=headers,
+            content=body,
+            cb=provider.circuit_breaker,
+            max_retries=config.max_retries,
+            base_delay=config.base_delay,
+            backoff_factor=config.backoff_factor,
+        )
+
+        if isinstance(response, HTTPXResponse) and response.status_code in _SUCCESS_STATUS_CODES:
+            if "completions" in path:
+                metadata = ChainMetadataForTracking(
+                    chain_type=ChainType.prompt,
+                    chain_name="proxy",
+                    group_id=request.headers.get("x-group-id", "unknown"),
+                )
+                try:
+                    MetricsCallbackHandler(metadata).on_llm_end(json.loads(response.text))
+                except Exception as e:
+                    logger.error("Error processing LLM usage metrics", exc_info=e)
+
+            return JSONResponse(content=extract_content(response), status_code=response.status_code)
+
+        response_dict = extract_content(response)
+        logger.error("Provider proxy error", details={
+            "provider": config.prefix,
+            "status_code": response.status_code,
+            "target_url": target_url,
+            "response": response_dict,
+        })
+        return JSONResponse(
+            content={
+                "error": {
+                    "status_code": response.status_code,
+                    "message": response_dict.get("message", "Proxy request failed"),
+                    "details": {"response": response_dict},
+                }
+            },
+            status_code=response.status_code,
+        )
+
+    except Exception as e:
+        logger.error("Provider proxy exception", details={
+            "provider": config.prefix,
+            "target_url": target_url,
+            "exception": str(e),
+            "exception_type": type(e).__name__,
+        })
+        return JSONResponse(
+            content={"error": {"status_code": 500, "message": "Proxy request failed"}},
+            status_code=500,
+        )

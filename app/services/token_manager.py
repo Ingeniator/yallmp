@@ -8,9 +8,10 @@ logger = setup_logging()
 
 
 class OIDCTokenManager:
-    def __init__(self, authorization_url, credentials):
+    def __init__(self, authorization_url, credentials, scope=None):
         self.authorization_url = authorization_url
         self.credentials = credentials
+        self.scope = scope
         self.token = None
         self.expires_at = 0  # Timestamp in milliseconds when the token expires
 
@@ -19,7 +20,7 @@ class OIDCTokenManager:
         response = await client.post(
             self.authorization_url,
             data={
-                "scope": settings.chain_default_scope
+                "scope": self.scope or settings.chain_default_scope
             },
             headers={
                 "Content-Type": "application/x-www-form-urlencoded",

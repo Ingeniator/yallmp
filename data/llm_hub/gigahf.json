@@ -1,9 +1,0 @@
-{
-    "lc": 1,
-    "type": "constructor",
-    "id": ["langchain", "chat_models", "openai", "ChatOpenAI"],
-    "kwargs": {
-        "openai_api_key": "{{env.LLM_SOMESERVICE_API_KEY}}",
-        "openai_api_base": "https://someservice.com/v1"
-    }
-}

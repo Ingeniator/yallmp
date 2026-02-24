@@ -13,6 +13,7 @@ def test_health_all_disabled():
         mock_settings.proxy_enabled = False
         mock_settings.prompt_hub_enabled = False
         mock_settings.chain_hub_enabled = False
+        mock_settings.llm_hub_enabled = False
         mock_settings.version = "0.0.1-test"
 
         from app.core.app import create_app
@@ -36,6 +37,7 @@ def test_health_all_enabled():
         mock_settings.proxy_enabled = True
         mock_settings.prompt_hub_enabled = True
         mock_settings.chain_hub_enabled = True
+        mock_settings.llm_hub_enabled = False
         mock_settings.version = "0.0.1-test"
 
         from app.core.app import create_app
@@ -57,6 +59,7 @@ def test_metrics_endpoint():
         mock_settings.proxy_enabled = False
         mock_settings.prompt_hub_enabled = False
         mock_settings.chain_hub_enabled = False
+        mock_settings.llm_hub_enabled = False
         mock_settings.version = "0.0.1-test"
 
         from app.core.app import create_app
@@ -77,6 +80,7 @@ def test_lifespan_no_proxy():
         mock_settings.proxy_enabled = False
         mock_settings.prompt_hub_enabled = False
         mock_settings.chain_hub_enabled = False
+        mock_settings.llm_hub_enabled = False
         mock_settings.version = "0.0.1-test"
 
         from app.core.app import create_app
@@ -101,6 +105,7 @@ def test_lifespan_with_proxy():
         mock_settings.proxy_enabled = True
         mock_settings.prompt_hub_enabled = False
         mock_settings.chain_hub_enabled = False
+        mock_settings.llm_hub_enabled = False
         mock_settings.version = "0.0.1-test"
 
         from app.core.app import create_app
@@ -120,6 +125,7 @@ def _mock_settings(**overrides):
     defaults = dict(
         app_name="TestApp", debug=False, root_path="", allowed_origins=["*"],
         proxy_enabled=False, prompt_hub_enabled=False, chain_hub_enabled=False,
+        llm_hub_enabled=False,
         version="0.0.1-test",
     )
     defaults.update(overrides)

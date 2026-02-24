@@ -26,6 +26,10 @@ class AppSettings(BaseSettings):
     proxy_enabled: bool = False
     prompt_hub_enabled: bool = False
     chain_hub_enabled: bool = False
+    llm_hub_enabled: bool = False
+
+    # LLM Hub
+    llm_hub_directory: str = "data/llm_hub"
 
     # Logging
     log_level: str = "INFO"
@@ -70,7 +74,7 @@ class AppSettings(BaseSettings):
     chain_default_credentials: str = ""
     chain_default_scope: str = "GIGACHAT_API_CORP"
     chain_default_available_chat_models: list[str] = ["Gigachat:latest", "GigaChat-Pro", "GigaChat-Max", "Gigachat-2:latest", "DeepSeek-R1"]
-    chain_default_json_file: str = "./data/llm_hub/default.json"
+    chain_default_json_file: str = "./data/llm_hub/langchain/default.json"
 
     version: str = "0.1.0"
     
