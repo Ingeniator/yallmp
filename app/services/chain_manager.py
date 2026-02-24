@@ -183,21 +183,22 @@ class StaticChainStore(ChainStore):
         metrics_handler = MetricsCallbackHandler(metadata=metadata)
         callbacks = [metrics_handler]
 
-        if settings.langfuse_enabled:
+        if settings.tracing_enabled:
             try:
-                from langfuse.callback import CallbackHandler as LangfuseHandler
-                langfuse_kwargs = {
-                    "trace_name": "chain-execution",
-                    "metadata": {
-                        "chain_name": metadata.chain_name if metadata else None,
-                        "group_id": metadata.group_id if metadata else None,
-                    },
-                }
-                if not settings.langfuse_log_io:
-                    langfuse_kwargs["public"] = True
-                callbacks.append(LangfuseHandler(**langfuse_kwargs))
+                from app.services.tracing import get_emitter
+                emitter = get_emitter()
+                if emitter:
+                    cb = emitter.get_langchain_callback(
+                        trace_name="chain-execution",
+                        metadata={
+                            "chain_name": metadata.chain_name if metadata else None,
+                            "group_id": metadata.group_id if metadata else None,
+                        },
+                    )
+                    if cb:
+                        callbacks.append(cb)
             except Exception as e:
-                logger.error("Failed to initialize Langfuse callback handler", exc_info=e)
+                logger.error("Failed to initialize tracing callback handler", exc_info=e)
 
         max_fallbacks = len(self.default_available_chat_models)
         for attempt in range(max_fallbacks + 1):

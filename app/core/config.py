@@ -31,9 +31,10 @@ class AppSettings(BaseSettings):
     # LLM Hub
     llm_hub_directory: str = "data/llm_hub"
 
-    # Langfuse
-    langfuse_enabled: bool = False
-    langfuse_log_io: bool = True  # True = log messages+response content; False = metadata only
+    # Tracing
+    tracing_enabled: bool = False
+    tracing_log_io: bool = True  # True = log messages+response content; False = metadata only
+    tracing_backend: str = "langfuse"  # selects which TraceEmitter to instantiate
 
     # Logging
     log_level: str = "INFO"

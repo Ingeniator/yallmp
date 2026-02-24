@@ -13,7 +13,7 @@ import json
 import fnmatch
 from typing import AsyncIterator
 from app.core.security import redact_headers
-from app.services.langfuse_tracing import trace_proxy_request
+from app.services.tracing import trace_proxy_request
 
 logger = setup_logging()
 
