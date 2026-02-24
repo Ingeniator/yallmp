@@ -35,6 +35,9 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    from app.services.langfuse_tracing import shutdown as langfuse_shutdown
+    langfuse_shutdown()
+
     if llm_hub:
         await llm_hub.shutdown()
     if app.state.client:

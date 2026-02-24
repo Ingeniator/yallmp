@@ -26,4 +26,4 @@ tests/load/report.html
 uv.lock
 devops/Dockerfile
 uv.lock
-devops/Dockerfile
+devops/*

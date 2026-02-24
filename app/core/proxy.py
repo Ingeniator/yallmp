@@ -13,6 +13,7 @@ import json
 import fnmatch
 from typing import AsyncIterator
 from app.core.security import redact_headers
+from app.services.langfuse_tracing import trace_proxy_request
 
 logger = setup_logging()
 
@@ -355,6 +356,7 @@ async def proxy_request_with_retries(client: AsyncClient, path: str, request: Re
                 body=body, path=path, request=request,
             )
 
+        start_time = time.time()
         response = await exponential_backoff_retry(
             client.request, method, target_url, headers=headers, content=body
         )
@@ -363,15 +365,33 @@ async def proxy_request_with_retries(client: AsyncClient, path: str, request: Re
             logger.debug(f"Proxy request successful: {method} {target_url} -> {response.status_code}")
 
             if 'completions' in path:
+                response_data = json.loads(response.text)
                 metadata = ChainMetadataForTracking(
                     chain_type=ChainType.prompt,
                     chain_name="proxy",
                     group_id=request.headers.get("x-group-id", "unknown"))
                 llm_usage_metrics_handler = MetricsCallbackHandler(metadata)
                 try:
-                    llm_usage_metrics_handler.on_llm_end(json.loads(response.text))
+                    llm_usage_metrics_handler.on_llm_end(response_data)
                 except Exception as e:
                     logger.error("Error processing LLM usage metrics", exc_info=e)
+
+                duration_ms = (time.time() - start_time) * 1000
+                try:
+                    input_body = json.loads(body) if body else None
+                except (json.JSONDecodeError, AttributeError):
+                    input_body = None
+                trace_proxy_request(
+                    model=response_data.get("model", ""),
+                    provider=None,
+                    input_body=input_body,
+                    output_body=response_data,
+                    status_code=response.status_code,
+                    usage=response_data.get("usage"),
+                    duration_ms=duration_ms,
+                    group_id=request.headers.get("x-group-id", "unknown"),
+                    is_streaming=False,
+                )
 
             return JSONResponse(
                 content=extract_content(response),
@@ -418,8 +438,10 @@ async def proxy_request_with_retries(client: AsyncClient, path: str, request: Re
 async def _handle_streaming_request(
     client: AsyncClient, target_url: str, headers: dict,
     body: bytes, path: str, request: Request,
+    provider_prefix: str | None = None,
 ) -> StreamingResponse | JSONResponse:
     """Handle a streaming proxy request, forwarding SSE chunks from upstream."""
+    start_time = time.time()
     try:
         upstream_response = await client.send(
             client.build_request("POST", target_url, headers=headers, content=body),
@@ -455,7 +477,7 @@ async def _handle_streaming_request(
             await upstream_response.aclose()
             # Parse collected SSE data for metrics
             if "completions" in path:
-                _emit_streaming_metrics(collected_chunks, request)
+                _emit_streaming_metrics(collected_chunks, request, start_time, body, provider_prefix)
 
     return StreamingResponse(
         _stream_generator(),
@@ -464,8 +486,14 @@ async def _handle_streaming_request(
     )
 
 
-def _emit_streaming_metrics(chunks: list[str], request: Request) -> None:
-    """Parse SSE chunks for usage data and emit metrics."""
+def _emit_streaming_metrics(
+    chunks: list[str],
+    request: Request,
+    start_time: float = 0,
+    body: bytes = b"",
+    provider_prefix: str | None = None,
+) -> None:
+    """Parse SSE chunks for usage data and emit metrics + tracing."""
     try:
         full_text = "".join(chunks)
         # SSE lines look like: "data: {...}\n\n" — find the last data line before [DONE]
@@ -484,6 +512,23 @@ def _emit_streaming_metrics(chunks: list[str], request: Request) -> None:
                     group_id=request.headers.get("x-group-id", "unknown"),
                 )
                 MetricsCallbackHandler(metadata).on_llm_end(last_payload)
+
+            duration_ms = (time.time() - start_time) * 1000 if start_time else 0
+            try:
+                input_body = json.loads(body) if body else None
+            except (json.JSONDecodeError, AttributeError):
+                input_body = None
+            trace_proxy_request(
+                model=last_payload.get("model", ""),
+                provider=provider_prefix,
+                input_body=input_body,
+                output_body=last_payload,
+                status_code=200,
+                usage=last_payload.get("usage"),
+                duration_ms=duration_ms,
+                group_id=request.headers.get("x-group-id", "unknown"),
+                is_streaming=True,
+            )
     except Exception as e:
         logger.error("Error processing streaming LLM usage metrics", exc_info=e)
 
@@ -541,8 +586,10 @@ async def proxy_request_to_provider(
                 body=body,
                 path=path,
                 request=request,
+                provider_prefix=config.prefix,
             )
 
+        start_time = time.time()
         response = await exponential_backoff_retry(
             provider.client.request,
             method,
@@ -557,15 +604,33 @@ async def proxy_request_to_provider(
 
         if isinstance(response, HTTPXResponse) and response.status_code in _SUCCESS_STATUS_CODES:
             if "completions" in path:
+                response_data = json.loads(response.text)
                 metadata = ChainMetadataForTracking(
                     chain_type=ChainType.prompt,
                     chain_name="proxy",
                     group_id=request.headers.get("x-group-id", "unknown"),
                 )
                 try:
-                    MetricsCallbackHandler(metadata).on_llm_end(json.loads(response.text))
+                    MetricsCallbackHandler(metadata).on_llm_end(response_data)
                 except Exception as e:
                     logger.error("Error processing LLM usage metrics", exc_info=e)
+
+                duration_ms = (time.time() - start_time) * 1000
+                try:
+                    input_body = json.loads(body) if body else None
+                except (json.JSONDecodeError, AttributeError):
+                    input_body = None
+                trace_proxy_request(
+                    model=response_data.get("model", ""),
+                    provider=config.prefix,
+                    input_body=input_body,
+                    output_body=response_data,
+                    status_code=response.status_code,
+                    usage=response_data.get("usage"),
+                    duration_ms=duration_ms,
+                    group_id=request.headers.get("x-group-id", "unknown"),
+                    is_streaming=False,
+                )
 
             return JSONResponse(content=extract_content(response), status_code=response.status_code)
 

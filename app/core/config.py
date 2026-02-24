@@ -31,6 +31,10 @@ class AppSettings(BaseSettings):
     # LLM Hub
     llm_hub_directory: str = "data/llm_hub"
 
+    # Langfuse
+    langfuse_enabled: bool = False
+    langfuse_log_io: bool = True  # True = log messages+response content; False = metadata only
+
     # Logging
     log_level: str = "INFO"
     log_file: str | None = None
