@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Metrics Dashboard</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f7fa; color: #333; padding: 20px; }
+  .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; flex-wrap: wrap; gap: 12px; }
+  .header h1 { font-size: 1.5rem; }
+  .header-right { display: flex; align-items: center; gap: 16px; font-size: 0.85rem; color: #666; }
+  .header-right select { padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; }
+  .section { margin-bottom: 32px; }
+  .section h2 { font-size: 1.15rem; margin-bottom: 12px; border-bottom: 2px solid #4a90d9; padding-bottom: 4px; }
+  .charts-row { display: flex; gap: 20px; margin-bottom: 16px; flex-wrap: wrap; }
+  .chart-container { flex: 1; min-width: 300px; background: #fff; border-radius: 8px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+  .chart-container h3 { font-size: 0.9rem; margin-bottom: 8px; color: #555; }
+  .chart-container canvas { width: 100% !important; max-height: 280px; }
+  table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+  th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid #eee; font-size: 0.85rem; }
+  th { background: #f0f4f8; font-weight: 600; color: #555; }
+  tr:last-child td { border-bottom: none; }
+  .empty-msg { color: #999; font-style: italic; padding: 16px; text-align: center; }
+  .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+  .status-dot.ok { background: #4caf50; }
+  .status-dot.stale { background: #ff9800; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Metrics Dashboard</h1>
+  <div class="header-right">
+    <span><span class="status-dot ok" id="statusDot"></span>Updated: <span id="lastUpdated">-</span></span>
+    <label>Refresh:
+      <select id="refreshInterval">
+        <option value="5000">5s</option>
+        <option value="15000">15s</option>
+        <option value="30000" selected>30s</option>
+        <option value="60000">60s</option>
+        <option value="0">Off</option>
+      </select>
+    </label>
+  </div>
+</div>
+
+<div class="section" id="tokenSection">
+  <h2>Token Usage</h2>
+  <div class="charts-row">
+    <div class="chart-container"><h3>Tokens by Model</h3><canvas id="chartByModel"></canvas></div>
+    <div class="chart-container"><h3>Tokens by Group</h3><canvas id="chartByGroup"></canvas></div>
+  </div>
+  <table id="tokenTable">
+    <thead><tr><th>Metric</th><th>Type</th><th>Name</th><th>Group</th><th>Model</th><th>Value</th></tr></thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+<div class="section" id="httpSection">
+  <h2>HTTP Requests</h2>
+  <div class="charts-row">
+    <div class="chart-container"><h3>Requests by Endpoint</h3><canvas id="chartReqByEndpoint"></canvas></div>
+    <div class="chart-container"><h3>Avg Duration by Endpoint (s)</h3><canvas id="chartDurByEndpoint"></canvas></div>
+  </div>
+  <table id="httpTable">
+    <thead><tr><th>Method</th><th>Endpoint</th><th>Status</th><th>Count</th></tr></thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+(function() {
+  const API_URL = (window.location.pathname.replace(/\/$/, '')) + '/api/metrics';
+  const COLORS = ['#4a90d9','#50c878','#f5a623','#d94a68','#9b59b6','#1abc9c','#e67e22','#3498db','#e74c3c','#2ecc71'];
+
+  let charts = {};
+  let refreshTimer = null;
+  let chartsAvailable = typeof Chart !== 'undefined';
+
+  function color(i) { return COLORS[i % COLORS.length]; }
+
+  function createOrUpdateChart(canvasId, type, labels, data, label) {
+    if (!chartsAvailable) return;
+    const ctx = document.getElementById(canvasId);
+    if (!ctx) return;
+
+    if (charts[canvasId]) {
+      charts[canvasId].data.labels = labels;
+      charts[canvasId].data.datasets[0].data = data;
+      charts[canvasId].data.datasets[0].backgroundColor = labels.map((_, i) => color(i));
+      charts[canvasId].update();
+      return;
+    }
+
+    charts[canvasId] = new Chart(ctx.getContext('2d'), {
+      type: type,
+      data: {
+        labels: labels,
+        datasets: [{
+          label: label,
+          data: data,
+          backgroundColor: labels.map((_, i) => color(i)),
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: { y: { beginAtZero: true } }
+      }
+    });
+  }
+
+  function renderBarChart(canvasId, obj, label) {
+    const keys = Object.keys(obj);
+    const vals = Object.values(obj);
+    if (keys.length === 0) {
+      if (!chartsAvailable) return;
+      const ctx = document.getElementById(canvasId);
+      if (ctx) ctx.parentElement.querySelector('h3').textContent += ' (no data)';
+      return;
+    }
+    createOrUpdateChart(canvasId, 'bar', keys, vals, label);
+  }
+
+  function renderTokenTable(entries) {
+    const tbody = document.querySelector('#tokenTable tbody');
+    if (!entries.length) {
+      tbody.innerHTML = '<tr><td colspan="6" class="empty-msg">No token usage data yet</td></tr>';
+      return;
+    }
+    tbody.innerHTML = entries.map(e =>
+      `<tr><td>${esc(e.metric)}</td><td>${esc(e.type||'')}</td><td>${esc(e.name||'')}</td><td>${esc(e.group_id||'')}</td><td>${esc(e.model||'')}</td><td>${fmt(e.value)}</td></tr>`
+    ).join('');
+  }
+
+  function renderHttpTable(entries) {
+    const tbody = document.querySelector('#httpTable tbody');
+    if (!entries.length) {
+      tbody.innerHTML = '<tr><td colspan="4" class="empty-msg">No HTTP request data yet</td></tr>';
+      return;
+    }
+    tbody.innerHTML = entries.map(e =>
+      `<tr><td>${esc(e.method||'')}</td><td>${esc(e.endpoint||'')}</td><td>${esc(e.status_code||'')}</td><td>${fmt(e.value)}</td></tr>`
+    ).join('');
+  }
+
+  function esc(s) {
+    const d = document.createElement('div');
+    d.textContent = String(s);
+    return d.innerHTML;
+  }
+
+  function fmt(v) { return typeof v === 'number' ? v.toLocaleString() : v; }
+
+  async function fetchAndRender() {
+    try {
+      const resp = await fetch(API_URL);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+
+      document.getElementById('lastUpdated').textContent = new Date(data.timestamp).toLocaleTimeString();
+      document.getElementById('statusDot').className = 'status-dot ok';
+
+      const s = data.summary || {};
+      renderBarChart('chartByModel', s.tokens_by_model || {}, 'Tokens');
+      renderBarChart('chartByGroup', s.tokens_by_group || {}, 'Tokens');
+      renderBarChart('chartReqByEndpoint', s.requests_by_endpoint || {}, 'Requests');
+      renderBarChart('chartDurByEndpoint', s.avg_duration_by_endpoint || {}, 'Avg Duration (s)');
+
+      renderTokenTable(data.token_usage || []);
+      renderHttpTable(data.http_requests || []);
+    } catch (err) {
+      console.error('Dashboard fetch error:', err);
+      document.getElementById('statusDot').className = 'status-dot stale';
+    }
+  }
+
+  function setupRefresh() {
+    const sel = document.getElementById('refreshInterval');
+    sel.addEventListener('change', function() {
+      if (refreshTimer) clearInterval(refreshTimer);
+      const ms = parseInt(this.value, 10);
+      if (ms > 0) refreshTimer = setInterval(fetchAndRender, ms);
+    });
+    // Start default interval
+    const ms = parseInt(sel.value, 10);
+    if (ms > 0) refreshTimer = setInterval(fetchAndRender, ms);
+  }
+
+  fetchAndRender();
+  setupRefresh();
+})();
+</script>
+</body>
+</html>

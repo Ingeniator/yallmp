@@ -7,9 +7,10 @@ from app.middlewares.metrics_middleware import PrometheusMiddleware, metrics
 from app.schemas.health import HealthCheck
 from app.schemas.prompt import ChainMetadataForTracking, ChainType
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from contextlib import asynccontextmanager
 import json
+import pathlib
 
 logger = setup_logging()
 
@@ -82,6 +83,22 @@ def create_app() -> FastAPI:
             components=components,
             version=settings.version
         )
+
+    # Dashboard routes
+    from app.middlewares.metrics_middleware import registry
+    from app.services.dashboard import get_dashboard_json
+
+    _dashboard_html = pathlib.Path(__file__).resolve().parent.parent.joinpath(
+        "templates", "dashboard.html"
+    ).read_text()
+
+    @app.get("/dashboard")
+    async def dashboard():
+        return HTMLResponse(content=_dashboard_html)
+
+    @app.get("/dashboard/api/metrics")
+    async def dashboard_api_metrics():
+        return get_dashboard_json(registry)
 
     if settings.proxy_enabled:
         from app.core.proxy import proxy_request_with_retries, get_model_version, proxy_request_to_provider
