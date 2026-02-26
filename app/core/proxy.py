@@ -439,6 +439,8 @@ async def _handle_streaming_request(
     client: AsyncClient, target_url: str, headers: dict,
     body: bytes, path: str, request: Request,
     provider_prefix: str | None = None,
+    provider_currency: str | None = None,
+    pricing_cache=None,
 ) -> StreamingResponse | JSONResponse:
     """Handle a streaming proxy request, forwarding SSE chunks from upstream."""
     start_time = time.time()
@@ -477,7 +479,10 @@ async def _handle_streaming_request(
             await upstream_response.aclose()
             # Parse collected SSE data for metrics
             if "completions" in path:
-                _emit_streaming_metrics(collected_chunks, request, start_time, body, provider_prefix)
+                _emit_streaming_metrics(
+                    collected_chunks, request, start_time, body,
+                    provider_prefix, provider_currency, pricing_cache,
+                )
 
     return StreamingResponse(
         _stream_generator(),
@@ -492,6 +497,8 @@ def _emit_streaming_metrics(
     start_time: float = 0,
     body: bytes = b"",
     provider_prefix: str | None = None,
+    provider_currency: str | None = None,
+    pricing_cache=None,
 ) -> None:
     """Parse SSE chunks for usage data and emit metrics + tracing."""
     try:
@@ -511,7 +518,12 @@ def _emit_streaming_metrics(
                     chain_name="proxy",
                     group_id=request.headers.get("x-group-id", "unknown"),
                 )
-                MetricsCallbackHandler(metadata).on_llm_end(last_payload)
+                MetricsCallbackHandler(
+                    metadata,
+                    provider_prefix=provider_prefix,
+                    currency=provider_currency,
+                    pricing_cache=pricing_cache,
+                ).on_llm_end(last_payload)
 
             duration_ms = (time.time() - start_time) * 1000 if start_time else 0
             try:
@@ -552,6 +564,7 @@ async def proxy_request_to_provider(
     auth_headers: dict[str, str],
     original_model: str,
     stripped_model: str,
+    pricing_cache=None,
 ):
     """Route a request to a specific LLM provider, stripping the model prefix."""
     config = provider.config
@@ -587,6 +600,8 @@ async def proxy_request_to_provider(
                 path=path,
                 request=request,
                 provider_prefix=config.prefix,
+                provider_currency=config.currency,
+                pricing_cache=pricing_cache,
             )
 
         start_time = time.time()
@@ -611,7 +626,12 @@ async def proxy_request_to_provider(
                     group_id=request.headers.get("x-group-id", "unknown"),
                 )
                 try:
-                    MetricsCallbackHandler(metadata).on_llm_end(response_data)
+                    MetricsCallbackHandler(
+                        metadata,
+                        provider_prefix=config.prefix,
+                        currency=config.currency,
+                        pricing_cache=pricing_cache,
+                    ).on_llm_end(response_data)
                 except Exception as e:
                     logger.error("Error processing LLM usage metrics", exc_info=e)
 

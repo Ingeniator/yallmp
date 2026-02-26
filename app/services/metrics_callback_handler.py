@@ -21,11 +21,25 @@ completion_token_usage_counter = Counter(
     'Completion LLM tokens used by the prompt',
     ["type", "name", "group_id", "model"]
 )
+llm_cost_total = Counter(
+    'llm_cost_total',
+    'Total estimated cost in provider currency',
+    ["provider", "currency", "model", "group_id"]
+)
 
 
 class MetricsCallbackHandler(BaseCallbackHandler):
-    def __init__(self, metadata: ChainMetadataForTracking | None = None):
+    def __init__(
+        self,
+        metadata: ChainMetadataForTracking | None = None,
+        provider_prefix: str | None = None,
+        currency: str | None = None,
+        pricing_cache=None,
+    ):
         self.metadata = metadata
+        self.provider_prefix = provider_prefix
+        self.currency = currency
+        self.pricing_cache = pricing_cache
 
     def on_llm_end(self, response, **kwargs):
         group_id = self.metadata.group_id if self.metadata else "unknown"
@@ -57,3 +71,16 @@ class MetricsCallbackHandler(BaseCallbackHandler):
         total_token_usage_counter.labels(**labels).inc(total_token_usage)
         prompt_token_usage_counter.labels(**labels).inc(prompt_token_usage)
         completion_token_usage_counter.labels(**labels).inc(completion_token_usage)
+
+        # Cost tracking
+        if self.provider_prefix and self.pricing_cache and self.currency:
+            cost = self.pricing_cache.get_cost(
+                self.provider_prefix, model_name, prompt_token_usage, completion_token_usage,
+            )
+            if cost is not None:
+                llm_cost_total.labels(
+                    provider=self.provider_prefix,
+                    currency=self.currency,
+                    model=model_name,
+                    group_id=group_id,
+                ).inc(cost)

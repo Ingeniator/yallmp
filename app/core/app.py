@@ -34,7 +34,19 @@ async def lifespan(app: FastAPI):
 
     app.state.llm_hub = llm_hub
 
+    # Initialize pricing cache if hub is active
+    pricing_cache = None
+    if llm_hub and llm_hub.providers:
+        from app.services.pricing import PricingCache
+        pricing_cache = PricingCache(llm_hub.providers)
+        await pricing_cache.startup()
+
+    app.state.pricing_cache = pricing_cache
+
     yield
+
+    if pricing_cache:
+        await pricing_cache.shutdown()
 
     from app.services.tracing import shutdown as tracing_shutdown
     tracing_shutdown()
@@ -145,6 +157,7 @@ def create_app() -> FastAPI:
                             auth_headers=provider_headers,
                             original_model=model,
                             stripped_model=stripped_model,
+                            pricing_cache=app.state.pricing_cache,
                         )
 
             # Legacy single-provider path
