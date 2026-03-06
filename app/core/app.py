@@ -103,7 +103,6 @@ def create_app() -> FastAPI:
         )
 
     if settings.dashboard_enabled:
-        from prometheus_client import REGISTRY as registry
         from app.services.dashboard import get_dashboard_json
 
         _dashboard_html = pathlib.Path(__file__).resolve().parent.parent.joinpath(
@@ -118,7 +117,7 @@ def create_app() -> FastAPI:
         async def dashboard_api_metrics(request: Request):
             group_id = request.headers.get("x-group-id")
             is_org_admin = request.headers.get("x-role", "").upper() == "ORG_ADMIN"
-            return get_dashboard_json(registry, group_id=group_id, is_org_admin=is_org_admin)
+            return await get_dashboard_json(group_id=group_id, is_org_admin=is_org_admin)
 
     if settings.proxy_enabled:
         from app.core.proxy import proxy_request_with_retries, get_model_version, proxy_request_to_provider

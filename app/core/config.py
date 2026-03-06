@@ -28,6 +28,9 @@ class AppSettings(BaseSettings):
     chain_hub_enabled: bool = False
     llm_hub_enabled: bool = False
     dashboard_enabled: bool = False
+    dashboard_metrics_backend: str = "local"       # "local" or "prometheus"
+    dashboard_prometheus_url: str = ""             # e.g. "http://prometheus:9090"
+    dashboard_prometheus_timeout: int = 10
 
     # LLM Hub
     llm_hub_directory: str = "data/llm_hub"

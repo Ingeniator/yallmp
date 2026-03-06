@@ -124,6 +124,9 @@ def _mock_settings():
         chain_hub_enabled = False
         llm_hub_enabled = False
         dashboard_enabled = True
+        dashboard_metrics_backend = "local"
+        dashboard_prometheus_url = ""
+        dashboard_prometheus_timeout = 10
         version = "0.0.1-test"
     return S()
 
@@ -144,6 +147,7 @@ def test_dashboard_html_endpoint():
 
 def test_dashboard_api_metrics_endpoint():
     with patch("app.core.app.settings", _mock_settings()), \
+         patch("app.services.dashboard.settings", _mock_settings()), \
          patch("app.services.dashboard._load_endpoint_patterns", return_value=[]):
         from app.core.app import create_app
         from starlette.testclient import TestClient
@@ -162,10 +166,12 @@ def test_dashboard_api_metrics_endpoint():
     assert "timestamp" in data
 
 
+@pytest.mark.asyncio
+@patch("app.services.dashboard.settings", _mock_settings())
 @patch("app.services.dashboard._load_endpoint_patterns", return_value=[])
 @patch("app.services.dashboard.generate_latest", return_value=SAMPLE_METRICS.encode("utf-8"))
-def test_get_dashboard_json_summary(mock_gen, mock_patterns):
-    result = get_dashboard_json(_fake_registry())
+async def test_get_dashboard_json_summary(mock_gen, mock_patterns):
+    result = await get_dashboard_json(registry=_fake_registry())
 
     assert "summary" in result
     s = result["summary"]

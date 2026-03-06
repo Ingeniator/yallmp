@@ -2,8 +2,11 @@ import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from prometheus_client import generate_latest
+from prometheus_client import generate_latest, REGISTRY
 from prometheus_client.parser import text_string_to_metric_families
+
+from app.core.config import settings
+from app.services.dashboard_prometheus import fetch_metrics_from_prometheus
 
 _CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "dashboard" / "dashboard.json"
 
@@ -137,23 +140,38 @@ def _compute_avg_duration(entries):
     return avg
 
 
-def get_dashboard_json(registry, group_id=None, is_org_admin=False):
+async def get_dashboard_json(group_id=None, is_org_admin=False, registry=None):
     """Build complete dashboard payload with raw data and pre-aggregated summary.
 
     Args:
-        registry: Prometheus CollectorRegistry
         group_id: Optional group_id from x-group-id header for access scoping.
         is_org_admin: True when x-role header is ORG_ADMIN (shows whole org).
+        registry: Prometheus CollectorRegistry (used in local mode, defaults to REGISTRY).
     """
-    data = parse_metrics_to_dict(registry)
-
     patterns = _load_endpoint_patterns()
-    filtered_requests = _filter_by_group(_filter_by_endpoint(data["http_requests"], patterns), group_id, is_org_admin)
-    filtered_duration = _filter_by_group(_filter_by_endpoint(data["http_duration"], patterns), group_id, is_org_admin)
 
-    filtered_tokens = _filter_by_group(data["token_usage"], group_id, is_org_admin)
-    filtered_cost = _filter_by_group(data["cost"], group_id, is_org_admin)
+    if settings.dashboard_metrics_backend == "prometheus":
+        data = await fetch_metrics_from_prometheus(
+            url=settings.dashboard_prometheus_url,
+            timeout=settings.dashboard_prometheus_timeout,
+            group_id=group_id,
+            is_org_admin=is_org_admin,
+            endpoint_patterns=patterns,
+        )
+        # Already filtered by PromQL
+        filtered_tokens = data["token_usage"]
+        filtered_cost = data["cost"]
+        filtered_requests = data["http_requests"]
+        filtered_duration = data["http_duration"]
+    else:
+        # Local mode (existing behavior)
+        data = parse_metrics_to_dict(registry or REGISTRY)
+        filtered_requests = _filter_by_group(_filter_by_endpoint(data["http_requests"], patterns), group_id, is_org_admin)
+        filtered_duration = _filter_by_group(_filter_by_endpoint(data["http_duration"], patterns), group_id, is_org_admin)
+        filtered_tokens = _filter_by_group(data["token_usage"], group_id, is_org_admin)
+        filtered_cost = _filter_by_group(data["cost"], group_id, is_org_admin)
 
+    # Shared aggregation for both backends
     summary = {
         "tokens_by_model": _aggregate_tokens_by("model", filtered_tokens),
         "tokens_by_group": _aggregate_tokens_by("group_id", filtered_tokens),
