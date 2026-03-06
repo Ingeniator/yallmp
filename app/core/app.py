@@ -7,9 +7,10 @@ from app.middlewares.metrics_middleware import PrometheusMiddleware, metrics
 from app.schemas.health import HealthCheck
 from app.schemas.prompt import ChainMetadataForTracking, ChainType
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse, Response
 from contextlib import asynccontextmanager
 import json
+import pathlib
 
 logger = setup_logging()
 
@@ -33,7 +34,22 @@ async def lifespan(app: FastAPI):
 
     app.state.llm_hub = llm_hub
 
+    # Initialize pricing cache
+    pricing_cache = None
+    if llm_hub and llm_hub.providers:
+        from app.services.pricing import PricingCache
+        pricing_cache = PricingCache(llm_hub.providers)
+        await pricing_cache.startup()
+    elif settings.proxy_pricing_config:
+        from app.services.pricing import PricingCache
+        pricing_cache = PricingCache.from_json(settings.proxy_pricing_config)
+
+    app.state.pricing_cache = pricing_cache
+
     yield
+
+    if pricing_cache:
+        await pricing_cache.shutdown()
 
     from app.services.tracing import shutdown as tracing_shutdown
     tracing_shutdown()
@@ -61,17 +77,20 @@ def create_app() -> FastAPI:
     app.add_middleware(PrometheusMiddleware)
 
     # Expose metrics endpoint
+    from prometheus_client import generate_latest, CONTENT_TYPE_LATEST, REGISTRY
     @app.get("/metrics")
     async def get_metrics():
-        return await metrics()
+        return Response(content=generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)
 
     @app.get("/health")
     async def health_check() -> HealthCheck:
         """Check the health of the service and its components."""
         components = {
             "proxy": "ok" if settings.proxy_enabled else "disabled",
+            "llm_hub": "ok" if settings.llm_hub_enabled else "disabled",
             "chain_hub": "ok" if settings.chain_hub_enabled else "disabled",
-            "prompt_hub": "ok" if settings.prompt_hub_enabled else "disabled"
+            "prompt_hub": "ok" if settings.prompt_hub_enabled else "disabled",
+            "dashboard": "ok" if settings.dashboard_enabled else "disabled"
         }
 
         enabled = {k: v for k, v in components.items() if v != "disabled"}
@@ -82,6 +101,24 @@ def create_app() -> FastAPI:
             components=components,
             version=settings.version
         )
+
+    if settings.dashboard_enabled:
+        from app.services.dashboard import get_dashboard_json
+
+        _dashboard_html = pathlib.Path(__file__).resolve().parent.parent.joinpath(
+            "templates", "dashboard.html"
+        ).read_text()
+
+        @app.get("/dashboard")
+        async def dashboard():
+            return HTMLResponse(content=_dashboard_html)
+
+        @app.get("/dashboard/api/metrics")
+        async def dashboard_api_metrics(request: Request):
+            group_id = request.headers.get("x-group-id")
+            is_org_admin = request.headers.get("x-role", "").upper() == "ORG_ADMIN"
+            return await get_dashboard_json(group_id=group_id, is_org_admin=is_org_admin)
+
 
     if settings.proxy_enabled:
         from app.core.proxy import proxy_request_with_retries, get_model_version, proxy_request_to_provider
@@ -128,10 +165,11 @@ def create_app() -> FastAPI:
                             auth_headers=provider_headers,
                             original_model=model,
                             stripped_model=stripped_model,
+                            pricing_cache=app.state.pricing_cache,
                         )
 
             # Legacy single-provider path
-            return await proxy_request_with_retries(app.state.client, full_path, request, custom_headers)
+            return await proxy_request_with_retries(app.state.client, full_path, request, custom_headers, pricing_cache=app.state.pricing_cache)
 
     if settings.prompt_hub_enabled:
         from app.services.prompt_manager import promptStore, PromptVariables

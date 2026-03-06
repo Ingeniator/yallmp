@@ -6,13 +6,27 @@ logger = setup_logging()
 
 
 class LangfuseEmitter:
-    """TraceEmitter implementation backed by Langfuse."""
+    """TraceEmitter implementation backed by Langfuse.
+
+    Per-group isolation: each unique group_id gets its own Langfuse client
+    with public_key=group_id, so the backend can separate logs by group.
+    """
 
     def __init__(self):
         from langfuse import Langfuse
 
-        self._client = Langfuse()
+        self._default_client = Langfuse()
+        self._clients: dict[str, object] = {}
         logger.info("Langfuse client initialized")
+
+    def _get_client(self, group_id: str):
+        if not group_id or group_id == "unknown":
+            return self._default_client
+        if group_id not in self._clients:
+            from langfuse import Langfuse
+
+            self._clients[group_id] = Langfuse(public_key=group_id, secret_key=group_id)
+        return self._clients[group_id]
 
     def trace_proxy_request(
         self,
@@ -26,8 +40,10 @@ class LangfuseEmitter:
         group_id: str,
         is_streaming: bool,
     ) -> None:
-        trace = self._client.trace(
+        client = self._get_client(group_id)
+        trace = client.trace(
             name="llm-proxy",
+            user_id=group_id,
             metadata={
                 "provider": provider,
                 "group_id": group_id,
@@ -52,11 +68,21 @@ class LangfuseEmitter:
         try:
             from langfuse.callback import CallbackHandler
 
-            return CallbackHandler(trace_name=trace_name, metadata=metadata)
+            group_id = metadata.get("group_id", "")
+            client = self._get_client(group_id)
+            return CallbackHandler(
+                trace_name=trace_name,
+                metadata=metadata,
+                langfuse_client=client,
+            )
         except Exception as e:
             logger.error("Failed to create Langfuse callback handler", exc_info=e)
             return None
 
     def shutdown(self) -> None:
-        self._client.flush()
-        self._client.shutdown()
+        self._default_client.flush()
+        self._default_client.shutdown()
+        for client in self._clients.values():
+            client.flush()
+            client.shutdown()
+        self._clients.clear()

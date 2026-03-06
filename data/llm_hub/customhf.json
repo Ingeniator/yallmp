@@ -1,6 +1,10 @@
 {
     "prefix": "customhf",
     "base_url": "https://someservice.com",
+    "currency": "CHF",
+    "pricing": {
+        "some-model": {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002}
+    },
     "auth": {
         "type": "APIKEY",
         "api_key": "${LLM_SOMESERVICE_API_KEY}"

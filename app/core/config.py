@@ -27,6 +27,10 @@ class AppSettings(BaseSettings):
     prompt_hub_enabled: bool = False
     chain_hub_enabled: bool = False
     llm_hub_enabled: bool = False
+    dashboard_enabled: bool = False
+    dashboard_metrics_backend: str = "local"       # "local" or "prometheus"
+    dashboard_prometheus_url: str = ""             # e.g. "http://prometheus:9090"
+    dashboard_prometheus_timeout: int = 10
 
     # LLM Hub
     llm_hub_directory: str = "data/llm_hub"
@@ -56,6 +60,8 @@ class AppSettings(BaseSettings):
     proxy_oidc_authorization_url: str | None = None
     proxy_oidc_credentials: str | None = None
 
+    proxy_pricing_config: str | None = None  # Path to pricing JSON for legacy proxy mode
+
     proxy_max_retries: int = 5  # Number of retries before circuit breaker
     proxy_base_delay: float = 0.5  # Base delay in seconds
     proxy_backoff_factor: float = 2.0  # Exponential backoff multiplier
@@ -79,7 +85,7 @@ class AppSettings(BaseSettings):
     chain_default_credentials: str = ""
     chain_default_scope: str = "GIGACHAT_API_CORP"
     chain_default_available_chat_models: list[str] = ["Gigachat:latest", "GigaChat-Pro", "GigaChat-Max", "Gigachat-2:latest", "DeepSeek-R1"]
-    chain_default_json_file: str = "./data/llm_hub/langchain/default.json"
+    chain_default_json_file: str = "./data/langchain/default.json"
 
     version: str = "0.1.0"
     

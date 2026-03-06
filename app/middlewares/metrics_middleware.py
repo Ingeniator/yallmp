@@ -12,13 +12,13 @@ _PATH_ID_RE = re.compile(r'/[0-9a-f]{8,}(?:-[0-9a-f]{4,}){0,4}|/\d+')
 # Request count metric
 REQUEST_COUNT = Counter(
     "http_requests_total", "Total number of HTTP requests",
-    ["method", "endpoint", "status_code"]
+    ["method", "endpoint", "status_code", "group_id"]
 )
 
 # Request duration metric
 REQUEST_DURATION = Histogram(
     "http_request_duration_seconds", "Histogram of request processing time",
-    ["method", "endpoint"]
+    ["method", "endpoint", "group_id"]
 )
 
 logger = setup_logging()
@@ -42,13 +42,14 @@ class PrometheusMiddleware(BaseHTTPMiddleware):
 
         method = request.method
         endpoint = _normalize_path(request.url.path)
+        group_id = request.headers.get("x-group-id", "")
 
         start_time = time.time()
         response = await call_next(request)
         duration = time.time() - start_time
 
-        REQUEST_COUNT.labels(method=method, endpoint=endpoint, status_code=response.status_code).inc()
-        REQUEST_DURATION.labels(method=method, endpoint=endpoint).observe(duration)
+        REQUEST_COUNT.labels(method=method, endpoint=endpoint, status_code=response.status_code, group_id=group_id).inc()
+        REQUEST_DURATION.labels(method=method, endpoint=endpoint, group_id=group_id).observe(duration)
 
         return response
 

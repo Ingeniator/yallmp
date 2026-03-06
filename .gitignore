@@ -24,4 +24,6 @@ tests/load/report.json
 tests/load/report.html
 .snapshot.txt
 uv.lock
+devops/Dockerfile
+uv.lock
 devops/*

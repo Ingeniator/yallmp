@@ -85,6 +85,13 @@ run:  ## Run application
 run-fake-llm:  ## Run fake LLM application
 	uv run fake_llm_entrypoint.py
 
+.PHONY: call-llm
+call-llm:  ## Example chat completion call to the proxy (GROUP_ID=mygroup)
+	curl -s http://localhost:5005/ai/llm/v1/chat/completions \
+		-H "Content-Type: application/json" \
+		-H "x-group-id: $(GROUP_ID)" \
+		-d '{"model": "thebloke/tinyllama-1.1b-chat-v1.0", "messages": [{"role": "user", "content": "Say hello in one sentence."}]}' | python3 -m json.tool
+
 ## ---------- Code Quality ----------
 
 .PHONY: lint

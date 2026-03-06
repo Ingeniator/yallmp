@@ -26,6 +26,11 @@ class TimeoutConfig(BaseModel):
     pool: int | None = None
 
 
+class PricingInfo(BaseModel):
+    input_cost_per_token: float
+    output_cost_per_token: float
+
+
 class LlmProviderConfig(BaseModel):
     prefix: str
     base_url: str
@@ -39,3 +44,6 @@ class LlmProviderConfig(BaseModel):
     max_retries: int = 5
     base_delay: float = 0.5
     backoff_factor: float = 2.0
+    currency: str = "USD"
+    pricing_endpoint: str | None = None
+    pricing: dict[str, PricingInfo] | None = None
