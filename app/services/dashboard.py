@@ -77,7 +77,7 @@ def parse_metrics_to_dict(registry):
             if name.startswith("llm_") and name.endswith("_token_usage_total"):
                 kind = name.replace("llm_", "").replace("_token_usage_total", "")
                 token_usage.append({"metric": kind, "value": value, **labels})
-            elif name == "llm_cost_total":
+            elif name in ("llm_cost_total", "llm_cost_total_total"):
                 cost.append({"value": value, **labels})
             elif name == "http_requests_total":
                 http_requests.append({"value": value, **labels})
