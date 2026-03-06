@@ -23,11 +23,6 @@ help:  ## Show available commands
 	@echo "$(CYAN)Available commands:$(RESET)"
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "$(CYAN)%-15s$(RESET) %s\n", $$1, $$2}'
 
-
-.PHONY: snapshot
-snapshot:
-	 find . -type f -not -path './dev/*' -not -path './uv.lock' -not -path './.git/*' -not -path '**/__pycache__/*' -not -path '**/.DS_Store' -not -path './.venv/*' -not -path './.*' -exec bash -c 'printf "\n>>> %s\n" "{}"; cat "{}"' \; > ./.snapshot.txt
-
 ## ---------- Local Development ----------
 .PHONY: dev-init
 dev-init:  ## Initialize development environment
@@ -44,6 +39,53 @@ run:  ## Run application
 run-fake-llm:  ## Run fake LLM application
 	python3 -m uv run fake_llm_entrypoint.py
 
+## ---------- Snaphot ---------------
+.PHONY: snapshot-create
+snapshot-create:
+	 find . -type f -not -path './dev/*' -not -path './uv.lock' -not -path './.git/*' -not -path '**/__pycache__/*' -not -path '**/.DS_Store' -not -path './.venv/*' -not -path './.*' -exec bash -c 'printf "\n>>> %s\n" "{}"; cat "{}"' \; > ./.snapshot.txt
+
+.PHONY: snapshot-restore
+snapshot-restore:
+	@echo "Restoring files from $(SNAPSHOT) into $(SCRIPT_DIR)"
+	@awk -v base_dir="$(SCRIPT_DIR)" '\
+		function get_dir(path,  n, parts, dir) {\
+			n = split(path, parts, "/");\
+			dir = parts[1];\
+			for (i = 2; i < n; i++) dir = dir "/" parts[i];\
+			return (n > 1) ? dir : ".";\
+		}\
+		function remove_last_blank_line(file,   cmd, last) {\
+			cmd = "tail -n 1 '\''" file "'\''";\
+			cmd | getline last;\
+			close(cmd);\
+			if (last == "") {\
+				cmd = "sed -i \"\" -e '\''$$d'\'' '\''" file "'\''";\
+				system(cmd);\
+			}\
+		}\
+		BEGIN { out = ""; first = 1 }\
+		/^>>> / {\
+			if (!first && out != "") {\
+				close(out);\
+				remove_last_blank_line(out);\
+			}\
+			first = 0;\
+			relpath = substr($$0, 5);\
+			gsub(/^[.]\//, "", relpath);\
+			dir = get_dir(relpath);\
+			system("mkdir -p '\''" base_dir "/" dir "'\''");\
+			out = base_dir "/" relpath;\
+			system("> '\''" out "'\''");\
+			next;\
+		}\
+		{ if (out != "") print >> out }\
+		END {\
+			if (out != "") {\
+				close(out);\
+				remove_last_blank_line(out);\
+			}\
+		}\
+	' "$(SNAPSHOT)"
 ## ---------- Code Quality ----------
 
 .PHONY: lint
