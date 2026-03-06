@@ -81,6 +81,14 @@ run:  ## Run application
 	mkdir -p /tmp/metrics
 	uv run entrypoint.py
 
+.PHONY: restart
+restart:  ## Restart application (kill existing and start fresh)
+	@-pkill -f "uv run entrypoint.py" 2>/dev/null || true
+	@-pkill -f "python3 entrypoint.py" 2>/dev/null || true
+	@sleep 1
+	mkdir -p /tmp/metrics
+	uv run entrypoint.py
+
 .PHONY: run-fake-llm
 run-fake-llm:  ## Run fake LLM application
 	uv run fake_llm_entrypoint.py

@@ -1,6 +1,6 @@
 {
     "prefix": "localllm",
-    "base_url": "http://10.231.237.28:1234",
+    "base_url": "http://127.0.0.1:1234",
     "currency": "LMSTUDIO",
     "pricing": {
         "llama3": {"input_cost_per_token": 0.0001, "output_cost_per_token": 0.0002},

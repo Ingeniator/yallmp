@@ -52,7 +52,19 @@
     <div class="chart-container"><h3>Tokens by Group</h3><canvas id="chartByGroup"></canvas></div>
   </div>
   <table id="tokenTable">
-    <thead><tr><th>Metric</th><th>Type</th><th>Name</th><th>Group</th><th>Model</th><th>Value</th></tr></thead>
+    <thead><tr></tr></thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+<div class="section" id="costSection">
+  <h2>LLM Cost</h2>
+  <div class="charts-row">
+    <div class="chart-container"><h3>Cost by Model</h3><canvas id="chartCostByModel"></canvas></div>
+    <div class="chart-container"><h3>Cost by Provider</h3><canvas id="chartCostByProvider"></canvas></div>
+  </div>
+  <table id="costTable">
+    <thead><tr></tr></thead>
     <tbody></tbody>
   </table>
 </div>
@@ -64,7 +76,7 @@
     <div class="chart-container"><h3>Avg Duration by Endpoint (s)</h3><canvas id="chartDurByEndpoint"></canvas></div>
   </div>
   <table id="httpTable">
-    <thead><tr><th>Method</th><th>Endpoint</th><th>Status</th><th>Count</th></tr></thead>
+    <thead><tr></tr></thead>
     <tbody></tbody>
   </table>
 </div>
@@ -125,25 +137,39 @@
     createOrUpdateChart(canvasId, 'bar', keys, vals, label);
   }
 
-  function renderTokenTable(entries) {
-    const tbody = document.querySelector('#tokenTable tbody');
-    if (!entries.length) {
-      tbody.innerHTML = '<tr><td colspan="6" class="empty-msg">No token usage data yet</td></tr>';
-      return;
-    }
-    tbody.innerHTML = entries.map(e =>
-      `<tr><td>${esc(e.metric)}</td><td>${esc(e.type||'')}</td><td>${esc(e.name||'')}</td><td>${esc(e.group_id||'')}</td><td>${esc(e.model||'')}</td><td>${fmt(e.value)}</td></tr>`
-    ).join('');
+  // Default columns per table (used when table_columns config is absent)
+  const DEFAULT_COLUMNS = {
+    token_usage: ['metric', 'type', 'name', 'group_id', 'model', 'value'],
+    cost: ['provider', 'model', 'group_id', 'currency', 'value'],
+    http_requests: ['method', 'endpoint', 'status_code', 'value'],
+  };
+
+  // Human-readable header labels
+  const COLUMN_LABELS = {
+    metric: 'Metric', type: 'Type', name: 'Name', group_id: 'Group',
+    model: 'Model', value: 'Value', provider: 'Provider', currency: 'Currency',
+    method: 'Method', endpoint: 'Endpoint', status_code: 'Status',
+  };
+
+  function fmtCell(key, v) {
+    if (key === 'value' && typeof v === 'number') return v.toLocaleString();
+    return esc(v != null ? v : '');
   }
 
-  function renderHttpTable(entries) {
-    const tbody = document.querySelector('#httpTable tbody');
+  function renderTable(tableId, entries, columns, emptyMsg) {
+    const table = document.getElementById(tableId);
+    const thead = table.querySelector('thead tr');
+    const tbody = table.querySelector('tbody');
+
+    // Build header
+    thead.innerHTML = columns.map(c => `<th>${esc(COLUMN_LABELS[c] || c)}</th>`).join('');
+
     if (!entries.length) {
-      tbody.innerHTML = '<tr><td colspan="4" class="empty-msg">No HTTP request data yet</td></tr>';
+      tbody.innerHTML = `<tr><td colspan="${columns.length}" class="empty-msg">${emptyMsg}</td></tr>`;
       return;
     }
     tbody.innerHTML = entries.map(e =>
-      `<tr><td>${esc(e.method||'')}</td><td>${esc(e.endpoint||'')}</td><td>${esc(e.status_code||'')}</td><td>${fmt(e.value)}</td></tr>`
+      '<tr>' + columns.map(c => `<td>${fmtCell(c, e[c])}</td>`).join('') + '</tr>'
     ).join('');
   }
 
@@ -167,11 +193,15 @@
       const s = data.summary || {};
       renderBarChart('chartByModel', s.tokens_by_model || {}, 'Tokens');
       renderBarChart('chartByGroup', s.tokens_by_group || {}, 'Tokens');
+      renderBarChart('chartCostByModel', s.cost_by_model || {}, 'Cost');
+      renderBarChart('chartCostByProvider', s.cost_by_provider || {}, 'Cost');
       renderBarChart('chartReqByEndpoint', s.requests_by_endpoint || {}, 'Requests');
       renderBarChart('chartDurByEndpoint', s.avg_duration_by_endpoint || {}, 'Avg Duration (s)');
 
-      renderTokenTable(data.token_usage || []);
-      renderHttpTable(data.http_requests || []);
+      const cols = data.table_columns || {};
+      renderTable('tokenTable', data.token_usage || [], cols.token_usage || DEFAULT_COLUMNS.token_usage, 'No token usage data yet');
+      renderTable('costTable', data.cost || [], cols.cost || DEFAULT_COLUMNS.cost, 'No cost data yet');
+      renderTable('httpTable', data.http_requests || [], cols.http_requests || DEFAULT_COLUMNS.http_requests, 'No HTTP request data yet');
     } catch (err) {
       console.error('Dashboard fetch error:', err);
       document.getElementById('statusDot').className = 'status-dot stale';
