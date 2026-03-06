@@ -33,11 +33,11 @@ http_request_duration_seconds_sum{method="GET",endpoint="/health"} 0.5
 http_request_duration_seconds_count{method="GET",endpoint="/health"} 10.0
 http_request_duration_seconds_sum{method="POST",endpoint="/llm/v1/chat/completions"} 2.5
 http_request_duration_seconds_count{method="POST",endpoint="/llm/v1/chat/completions"} 5.0
-# HELP llm_cost_total_total Total estimated cost in provider currency
-# TYPE llm_cost_total_total counter
-llm_cost_total_total{provider="openai",currency="USD",model="gpt-4",group_id="g1"} 0.0045
-llm_cost_total_total{provider="openai",currency="USD",model="gpt-3.5",group_id="g2"} 0.0002
-llm_cost_total_total{provider="anthropic",currency="USD",model="claude-3",group_id="g1"} 0.003
+# HELP llm_cost_total Total estimated cost in provider currency
+# TYPE llm_cost_total counter
+llm_cost_total{provider="openai",currency="USD",model="gpt-4",group_id="g1"} 0.0045
+llm_cost_total{provider="openai",currency="USD",model="gpt-3.5",group_id="g2"} 0.0002
+llm_cost_total{provider="anthropic",currency="USD",model="claude-3",group_id="g1"} 0.003
 """
 
 

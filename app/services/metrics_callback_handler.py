@@ -21,8 +21,8 @@ completion_token_usage_counter = Counter(
     'Completion LLM tokens used by the prompt',
     ["type", "name", "group_id", "model"]
 )
-llm_cost_total = Counter(
-    'llm_cost_total',
+llm_cost = Counter(
+    'llm_cost',
     'Total estimated cost in provider currency',
     ["provider", "currency", "model", "group_id"]
 )
@@ -78,7 +78,7 @@ class MetricsCallbackHandler(BaseCallbackHandler):
                 self.provider_prefix, model_name, prompt_token_usage, completion_token_usage,
             )
             if cost is not None:
-                llm_cost_total.labels(
+                llm_cost.labels(
                     provider=self.provider_prefix,
                     currency=self.currency,
                     model=model_name,

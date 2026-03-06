@@ -168,7 +168,7 @@ async def test_refresh_updates_last_refresh_time():
 # MetricsCallbackHandler – cost counter
 # ---------------------------------------------------------------------------
 
-@patch("app.services.metrics_callback_handler.llm_cost_total")
+@patch("app.services.metrics_callback_handler.llm_cost")
 @patch("app.services.metrics_callback_handler.total_token_usage_counter")
 @patch("app.services.metrics_callback_handler.prompt_token_usage_counter")
 @patch("app.services.metrics_callback_handler.completion_token_usage_counter")
@@ -199,7 +199,7 @@ def test_handler_increments_cost_counter(comp_c, prompt_c, total_c, cost_counter
     cost_counter.labels.return_value.inc.assert_called_with(0.42)
 
 
-@patch("app.services.metrics_callback_handler.llm_cost_total")
+@patch("app.services.metrics_callback_handler.llm_cost")
 @patch("app.services.metrics_callback_handler.total_token_usage_counter")
 @patch("app.services.metrics_callback_handler.prompt_token_usage_counter")
 @patch("app.services.metrics_callback_handler.completion_token_usage_counter")
@@ -216,7 +216,7 @@ def test_handler_skips_cost_when_no_pricing(comp_c, prompt_c, total_c, cost_coun
     cost_counter.labels.assert_not_called()
 
 
-@patch("app.services.metrics_callback_handler.llm_cost_total")
+@patch("app.services.metrics_callback_handler.llm_cost")
 @patch("app.services.metrics_callback_handler.total_token_usage_counter")
 @patch("app.services.metrics_callback_handler.prompt_token_usage_counter")
 @patch("app.services.metrics_callback_handler.completion_token_usage_counter")
