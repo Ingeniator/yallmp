@@ -27,6 +27,13 @@ llm_cost = Counter(
     ["provider", "currency", "model", "group_id"]
 )
 
+# Business metrics
+llm_requests_total = Counter(
+    'llm_requests_total',
+    'Total LLM completion requests',
+    ["model", "provider", "group_id"]
+)
+
 
 class MetricsCallbackHandler(BaseCallbackHandler):
     def __init__(
@@ -71,6 +78,13 @@ class MetricsCallbackHandler(BaseCallbackHandler):
         total_token_usage_counter.labels(**labels).inc(total_token_usage)
         prompt_token_usage_counter.labels(**labels).inc(prompt_token_usage)
         completion_token_usage_counter.labels(**labels).inc(completion_token_usage)
+
+        # Business metric: count each LLM request by model/provider/tenant
+        llm_requests_total.labels(
+            model=model_name,
+            provider=self.provider_prefix or "unknown",
+            group_id=group_id,
+        ).inc()
 
         # Cost tracking
         if self.provider_prefix and self.pricing_cache and self.currency:

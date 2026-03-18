@@ -1,0 +1,118 @@
+# Example Prometheus config for scraping ai-suite services.
+# Merge into your existing prometheus.yml or use as-is for local dev.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - "alert_rules.yml"
+  - "llogr_alert_rules.yml"
+  - "checkr_alert_rules.yml"
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  # ── yallmp (LLM proxy) ──────────────────────────────────────────────
+  - job_name: yallmp
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["yallmp:5000"]
+
+  # ── llogr (LLM log collector) ───────────────────────────────────────
+  - job_name: llogr
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["llogr:8000"]
+
+  # ── checkr (data validation) ────────────────────────────────────────
+  - job_name: checkr
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["checkr:5000"]
+
+  # ── Blackbox readiness probes (probe_success / probe_duration_seconds) ──
+  - job_name: blackbox-ready
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          - "http://yallmp:5000/ready"
+          - "http://llogr:8000/ready"
+          - "http://checkr:5000/ready"
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        regex: "http://([^:]+):.*"
+        target_label: job
+        replacement: "$1"
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  # ── Blackbox liveness probes ────────────────────────────────────────
+  - job_name: blackbox-livez
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          - "http://yallmp:5000/livez"
+          - "http://llogr:8000/livez"
+          - "http://checkr:5000/livez"
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        regex: "http://([^:]+):.*"
+        target_label: job
+        replacement: "$1-livez"
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  # ── Blackbox /health probes (rich status for dashboards) ────────────
+  - job_name: blackbox-health
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          - "http://yallmp:5000/health"
+          - "http://llogr:8000/health"
+          - "http://checkr:5000/health"
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        regex: "http://([^:]+):.*"
+        target_label: job
+        replacement: "$1-health"
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  # ── checkr LLM backend probe (yallmp dependency for gates 7-8) ─────
+  - job_name: checkr-llm-backend
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets: ["http://yallmp:5000/ready"]
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+      - target_label: job
+        replacement: checkr-llm-backend

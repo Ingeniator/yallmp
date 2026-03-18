@@ -4,6 +4,7 @@ import logging
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
+import structlog
 import time
 import json
 
@@ -13,6 +14,12 @@ logger = setup_logging()
 class LoggingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         """Middleware to log detailed request and response information"""
+
+        # Bind request_id to structlog context so every log line includes it
+        request_id = request.headers.get("x-request-id", "")
+        structlog.contextvars.clear_contextvars()
+        if request_id:
+            structlog.contextvars.bind_contextvars(request_id=request_id)
 
         # skip logging stream requests
         content_type = request.headers.get("content-type", "").lower()

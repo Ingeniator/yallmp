@@ -82,16 +82,81 @@ def create_app() -> FastAPI:
     async def get_metrics():
         return Response(content=generate_latest(get_metrics_registry()), media_type=CONTENT_TYPE_LATEST)
 
-    @app.get("/health")
-    async def health_check() -> HealthCheck:
-        """Check the health of the service and its components."""
+    @app.get("/livez")
+    async def livez():
+        """Liveness probe — process is alive, no dependency checks."""
+        return {"status": "ok"}
+
+    @app.get("/ready")
+    async def ready():
+        """Readiness probe — returns 200 if all enabled components are healthy, 503 otherwise."""
+        from app.core.proxy import circuit_breaker
+
         components = {
             "proxy": "ok" if settings.proxy_enabled else "disabled",
             "llm_hub": "ok" if settings.llm_hub_enabled else "disabled",
             "chain_hub": "ok" if settings.chain_hub_enabled else "disabled",
             "prompt_hub": "ok" if settings.prompt_hub_enabled else "disabled",
-            "dashboard": "ok" if settings.dashboard_enabled else "disabled"
+            "dashboard": "ok" if settings.dashboard_enabled else "disabled",
         }
+
+        if settings.proxy_enabled:
+            cb_status = await circuit_breaker.get_status()
+            if cb_status["circuit_open"]:
+                components["proxy"] = "degraded"
+
+        llm_hub = getattr(app.state, "llm_hub", None)
+        if settings.llm_hub_enabled and llm_hub and llm_hub.providers:
+            for prefix, provider in llm_hub.providers.items():
+                cb = await provider.circuit_breaker.get_status()
+                if cb["circuit_open"]:
+                    components["llm_hub"] = "degraded"
+                    break
+
+        enabled = {k: v for k, v in components.items() if v != "disabled"}
+        if all(v == "ok" for v in enabled.values()):
+            return Response(status_code=200)
+        return Response(status_code=503)
+
+    @app.get("/health")
+    async def health_check() -> HealthCheck:
+        """Full health status with component details — for dashboards and monitoring."""
+        from app.core.proxy import circuit_breaker
+
+        components = {
+            "proxy": "ok" if settings.proxy_enabled else "disabled",
+            "llm_hub": "ok" if settings.llm_hub_enabled else "disabled",
+            "chain_hub": "ok" if settings.chain_hub_enabled else "disabled",
+            "prompt_hub": "ok" if settings.prompt_hub_enabled else "disabled",
+            "dashboard": "ok" if settings.dashboard_enabled else "disabled",
+        }
+
+        details: dict = {}
+
+        # Check circuit breaker state (legacy single-provider proxy)
+        if settings.proxy_enabled:
+            cb_status = await circuit_breaker.get_status()
+            if cb_status["circuit_open"]:
+                components["proxy"] = "degraded"
+                details["proxy"] = {"circuit_breaker": "open"}
+
+        # Check LLM Hub providers — probe each provider's circuit breaker
+        llm_hub = getattr(app.state, "llm_hub", None)
+        if settings.llm_hub_enabled and llm_hub and llm_hub.providers:
+            provider_statuses = {}
+            for prefix, provider in llm_hub.providers.items():
+                cb = await provider.circuit_breaker.get_status()
+                if cb["circuit_open"]:
+                    provider_statuses[prefix] = "circuit_open"
+                else:
+                    provider_statuses[prefix] = "ok"
+
+            if any(v != "ok" for v in provider_statuses.values()):
+                if all(v != "ok" for v in provider_statuses.values()):
+                    components["llm_hub"] = "degraded"
+                else:
+                    components["llm_hub"] = "degraded"
+                details["llm_hub_providers"] = provider_statuses
 
         enabled = {k: v for k, v in components.items() if v != "disabled"}
         status = "ok" if all(v == "ok" for v in enabled.values()) else "degraded"
@@ -99,7 +164,8 @@ def create_app() -> FastAPI:
         return HealthCheck(
             status=status,
             components=components,
-            version=settings.version
+            version=settings.version,
+            details=details if details else None,
         )
 
     if settings.dashboard_enabled:
