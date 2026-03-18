@@ -2,9 +2,12 @@
   "prefix": "localllm",
   "currency": "LMSTUDIO",
   "pricing": {
+    "llama-3.2-3b-instruct": {"input_cost_per_token": 0.00006, "output_cost_per_token": 0.00006},
     "llama3": {"input_cost_per_token": 0.0001, "output_cost_per_token": 0.0002},
+    "mellum-4b-sft-python": {"input_cost_per_token": 0.00008, "output_cost_per_token": 0.00008},
     "mistral": {"input_cost_per_token": 0.00005, "output_cost_per_token": 0.0001},
     "qwen2": {"input_cost_per_token": 0.00008, "output_cost_per_token": 0.00015},
+    "tinyllama-1.1b-chat-v1.0@q8_9": {"input_cost_per_token": 0.00002, "output_cost_per_token": 0.00002},
     "thebloke/tinyllama-1.1b-chat-v1.0": {"input_cost_per_token": 0.0001, "output_cost_per_token": 0.0002}
   }
 }

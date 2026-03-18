@@ -6,7 +6,10 @@ logger = setup_logging()
 
 
 class LangfuseEmitter:
-    """TraceEmitter implementation backed by Langfuse.
+    """TraceEmitter implementation backed by Langfuse v3 SDK.
+
+    Uses the native OTEL-based Langfuse client which sends spans
+    to /api/public/otel/v1/traces via protobuf.
 
     Per-group isolation: each unique group_id gets its own Langfuse client
     with public_key=group_id, so the backend can separate logs by group.
@@ -17,7 +20,7 @@ class LangfuseEmitter:
 
         self._default_client = Langfuse()
         self._clients: dict[str, object] = {}
-        logger.info("Langfuse client initialized")
+        logger.info("Langfuse client initialized (OTEL mode)")
 
     def _get_client(self, group_id: str):
         if not group_id or group_id == "unknown":
@@ -41,28 +44,31 @@ class LangfuseEmitter:
         is_streaming: bool,
     ) -> None:
         client = self._get_client(group_id)
-        trace = client.trace(
+
+        usage_details = {}
+        if usage:
+            if "prompt_tokens" in usage:
+                usage_details["input"] = usage["prompt_tokens"]
+            if "completion_tokens" in usage:
+                usage_details["output"] = usage["completion_tokens"]
+            if "total_tokens" in usage:
+                usage_details["total"] = usage["total_tokens"]
+
+        gen = client.start_generation(
             name="llm-proxy",
-            user_id=group_id,
+            model=model,
+            input=input_body,
+            output=output_body,
+            usage_details=usage_details or None,
             metadata={
                 "provider": provider,
                 "group_id": group_id,
                 "is_streaming": is_streaming,
                 "status_code": status_code,
-            },
-        )
-        trace.generation(
-            name="llm-call",
-            model=model,
-            input=input_body,
-            output=output_body,
-            usage=usage,
-            metadata={
                 "duration_ms": duration_ms,
-                "status_code": status_code,
-                "provider": provider,
             },
         )
+        gen.end()
 
     def get_langchain_callback(self, trace_name: str, metadata: dict) -> object | None:
         try:

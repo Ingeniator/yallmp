@@ -39,6 +39,9 @@ class AppSettings(BaseSettings):
     tracing_enabled: bool = False
     tracing_log_io: bool = True  # True = log messages+response content; False = metadata only
     tracing_backend: str = "langfuse"  # selects which TraceEmitter to instantiate
+    tracing_host: str | None = None  # e.g. http://llogr:8000
+    tracing_public_key: str | None = None
+    tracing_secret_key: str | None = None
 
     # Logging
     log_level: str = "INFO"
