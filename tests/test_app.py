@@ -198,7 +198,7 @@ def test_prompt_hub_get_prompts_route():
     mock_prompt_store.get_prompts = AsyncMock(return_value={"greeting": {"input_variables": ["name"]}})
 
     with patch("app.core.app.settings", _mock_settings(prompt_hub_enabled=True)), \
-         patch("app.services.prompt_manager.promptStore", mock_prompt_store):
+         patch("app.services.prompt_manager.get_prompt_store", return_value=mock_prompt_store):
 
         from app.core.app import create_app
         app = create_app()
@@ -217,7 +217,7 @@ def test_prompt_hub_format_prompt_route():
     mock_prompt_store.format_prompt = AsyncMock(return_value="Hello, World!")
 
     with patch("app.core.app.settings", _mock_settings(prompt_hub_enabled=True)), \
-         patch("app.services.prompt_manager.promptStore", mock_prompt_store):
+         patch("app.services.prompt_manager.get_prompt_store", return_value=mock_prompt_store):
 
         from app.core.app import create_app
         app = create_app()
@@ -235,7 +235,7 @@ def test_chain_hub_get_chains_route():
     mock_chain_store.get_chains = AsyncMock(return_value={"summarize": {"model": "test"}})
 
     with patch("app.core.app.settings", _mock_settings(chain_hub_enabled=True)), \
-         patch("app.services.chain_manager.chainStore", mock_chain_store):
+         patch("app.services.chain_manager.get_chain_store", return_value=mock_chain_store):
 
         from app.core.app import create_app
         app = create_app()
@@ -254,7 +254,7 @@ def test_chain_hub_execute_route():
     mock_chain_store.execute = AsyncMock(return_value={"output": "summary text"})
 
     with patch("app.core.app.settings", _mock_settings(chain_hub_enabled=True)), \
-         patch("app.services.chain_manager.chainStore", mock_chain_store):
+         patch("app.services.chain_manager.get_chain_store", return_value=mock_chain_store):
 
         from app.core.app import create_app
         app = create_app()
@@ -282,8 +282,8 @@ def test_prompt_execute_route():
     mock_chain_store.get_chains = AsyncMock(return_value={})
 
     with patch("app.core.app.settings", _mock_settings(prompt_hub_enabled=True, chain_hub_enabled=True)), \
-         patch("app.services.prompt_manager.promptStore", mock_prompt_store), \
-         patch("app.services.chain_manager.chainStore", mock_chain_store):
+         patch("app.services.prompt_manager.get_prompt_store", return_value=mock_prompt_store), \
+         patch("app.services.chain_manager.get_chain_store", return_value=mock_chain_store):
 
         from app.core.app import create_app
         app = create_app()

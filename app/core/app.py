@@ -3,7 +3,7 @@ from fastapi import FastAPI, Depends, Request
 from app.core.config import settings
 from app.core.logging_config import setup_logging
 from app.middlewares.logging_middleware import LoggingMiddleware
-from app.middlewares.metrics_middleware import PrometheusMiddleware, metrics
+from app.middlewares.metrics_middleware import PrometheusMiddleware, get_metrics_registry
 from app.schemas.health import HealthCheck
 from app.schemas.prompt import ChainMetadataForTracking, ChainType
 from fastapi.middleware.cors import CORSMiddleware
@@ -77,10 +77,10 @@ def create_app() -> FastAPI:
     app.add_middleware(PrometheusMiddleware)
 
     # Expose metrics endpoint
-    from prometheus_client import generate_latest, CONTENT_TYPE_LATEST, REGISTRY
+    from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
     @app.get("/metrics")
     async def get_metrics():
-        return Response(content=generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)
+        return Response(content=generate_latest(get_metrics_registry()), media_type=CONTENT_TYPE_LATEST)
 
     @app.get("/health")
     async def health_check() -> HealthCheck:
@@ -172,31 +172,35 @@ def create_app() -> FastAPI:
             return await proxy_request_with_retries(app.state.client, full_path, request, custom_headers, pricing_cache=app.state.pricing_cache)
 
     if settings.prompt_hub_enabled:
-        from app.services.prompt_manager import promptStore, PromptVariables
+        from app.services.prompt_manager import get_prompt_store
+        from app.schemas.prompt import PromptVariables as _PromptVars
+
         @app.get("/prompts")
         async def get_prompts(category: str | None = None):
-            return await promptStore.get_prompts(category)
+            return await get_prompt_store().get_prompts(category)
 
         @app.post("/prompt/format/{name}")
-        async def format_prompt(name: str, data: PromptVariables):
-            return await promptStore.format_prompt(name, data)
+        async def format_prompt(name: str, data: _PromptVars):
+            return await get_prompt_store().format_prompt(name, data)
 
     if settings.chain_hub_enabled:
-        from app.services.chain_manager import chainStore, PromptVariables
+        from app.services.chain_manager import get_chain_store
+        from app.schemas.prompt import PromptVariables
+
         @app.get("/chains")
         async def get_chains(category: str | None = None):
-            return await chainStore.get_chains(category)
+            return await get_chain_store().get_chains(category)
 
         @app.post("/chain/execute/{name}")
         async def chain_execute(request: Request, name: str, data: PromptVariables, model_name: str = None):
             metadata = ChainMetadataForTracking(chain_type=ChainType.chain, chain_name = name, group_id = request.headers.get("x-group-id", "unknown"))
-            return await chainStore.execute(name, data, model_name, metadata)
+            return await get_chain_store().execute(name, data, model_name, metadata)
 
     if settings.prompt_hub_enabled and settings.chain_hub_enabled:
         @app.post("/prompt/execute/{name}")
         async def execute_prompt(request: Request, name: str, data: PromptVariables, model_name: str = None):
-            prompt = await promptStore.format_prompt(name, data)
+            prompt = await get_prompt_store().format_prompt(name, data)
             metadata = ChainMetadataForTracking(chain_type=ChainType.prompt, chain_name = name, group_id = request.headers.get("x-group-id", "unknown"))
-            return await chainStore.execute_prompt(prompt=prompt, model_name=model_name, metadata=metadata)
+            return await get_chain_store().execute_prompt(prompt=prompt, model_name=model_name, metadata=metadata)
 
     return app

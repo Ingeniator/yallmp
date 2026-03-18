@@ -97,4 +97,12 @@ class StaticPromptStore(PromptStore):
         }
         return filtered_data
 
-promptStore = StaticPromptStore(settings.prompt_hub_directory)
+_promptStore = None
+
+
+def get_prompt_store() -> StaticPromptStore:
+    """Lazy factory — only instantiate when the feature is actually used."""
+    global _promptStore
+    if _promptStore is None:
+        _promptStore = StaticPromptStore(settings.prompt_hub_directory)
+    return _promptStore

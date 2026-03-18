@@ -1,8 +1,9 @@
 import re
-from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST, multiprocess, CollectorRegistry
+from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST, multiprocess, CollectorRegistry, REGISTRY
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
+import os
 import time
 from app.core.logging_config import setup_logging
 
@@ -29,6 +30,22 @@ def _normalize_path(path: str) -> str:
     return _PATH_ID_RE.sub("/:id", path)
 
 
+def get_metrics_registry() -> CollectorRegistry:
+    """Return the correct registry for generating /metrics output.
+
+    In multi-worker mode (PROMETHEUS_MULTIPROC_DIR is set and exists) we build
+    a fresh CollectorRegistry with a MultiProcessCollector so that metrics from
+    all workers are merged.  In single-worker mode we fall back to the default
+    REGISTRY which already holds the Counter/Histogram instances above.
+    """
+    multiproc_dir = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
+    if multiproc_dir and os.path.isdir(multiproc_dir):
+        registry = CollectorRegistry()
+        multiprocess.MultiProcessCollector(registry)
+        return registry
+    return REGISTRY
+
+
 class PrometheusMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
 
@@ -53,9 +70,7 @@ class PrometheusMiddleware(BaseHTTPMiddleware):
 
         return response
 
-registry = CollectorRegistry()
-multiprocess.MultiProcessCollector(registry)
-
 
 async def metrics():
+    registry = get_metrics_registry()
     return Response(content=generate_latest(registry), media_type=CONTENT_TYPE_LATEST)

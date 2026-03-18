@@ -47,13 +47,21 @@ class LoggingMiddleware(BaseHTTPMiddleware):
 
         process_time = time.time() - start_time
 
-        if response.media_type == "text/event-stream":
+        is_streaming_response = response.media_type == "text/event-stream"
+        if is_streaming_response:
             logger.info("Streaming response", status_code=response.status_code, process_time=f"{process_time:.4f}s")
         elif logger.isEnabledFor(logging.DEBUG):
-            # Only consume response body for DEBUG logging
+            # Consume the response body for debug logging, but only up to a
+            # reasonable limit to avoid blocking on very large payloads.
+            _MAX_DEBUG_BODY = 64 * 1024  # 64 KB
             response_body = b""
             async for chunk in response.body_iterator:
                 response_body += chunk
+                if len(response_body) > _MAX_DEBUG_BODY:
+                    # Drain the rest without storing
+                    async for _ in response.body_iterator:
+                        pass
+                    break
 
             response = Response(
                 content=response_body,
@@ -70,7 +78,7 @@ class LoggingMiddleware(BaseHTTPMiddleware):
             try:
                 response_log["body"] = json.loads(response_body.decode("utf-8"))
             except (ValueError, UnicodeDecodeError):
-                response_log["body"] = response_body.decode("utf-8", errors="replace")
+                response_log["body"] = response_body[:_MAX_DEBUG_BODY].decode("utf-8", errors="replace")
 
             logger.debug("Outgoing Response", **response_log)
         else:

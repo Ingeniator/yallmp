@@ -20,11 +20,10 @@ logger = setup_logging()
 # HTTP success status codes — reused across the module
 _SUCCESS_STATUS_CODES = frozenset(range(200, 209)) | {226}
 
-def _get_exclude_header_patterns() -> frozenset[str]:
-    """Parse excluded header patterns from settings."""
-    return frozenset(
-        h.strip().lower() for h in settings.proxy_exclude_headers.split(",") if h.strip()
-    )
+# Cached at module level — parsed once from settings
+_EXCLUDE_HEADER_PATTERNS: frozenset[str] = frozenset(
+    h.strip().lower() for h in settings.proxy_exclude_headers.split(",") if h.strip()
+)
 
 
 class CircuitBreaker:
@@ -319,132 +318,215 @@ async def get_model_version(model_name: str, client: AsyncClient, request: Reque
         }, status_code=500)
 
 
+# ---------------------------------------------------------------------------
+# Shared proxy helpers (used by both legacy and multi-provider paths)
+# ---------------------------------------------------------------------------
+
+def _prepare_proxy_headers(request: Request, auth_headers: dict[str, str]) -> dict[str, str]:
+    """Build forwarded headers: filter excluded patterns, apply auth, force identity encoding."""
+    headers = dict(request.headers)
+    logger.debug(f"original headers {redact_headers(headers)}")
+    headers = {
+        k: v for k, v in headers.items()
+        if not any(fnmatch.fnmatch(k.lower(), p) for p in _EXCLUDE_HEADER_PATTERNS)
+    }
+    logger.debug(f"cleaned headers {redact_headers(headers)}")
+    headers.update(auth_headers)
+    headers["accept-encoding"] = "identity"
+    logger.debug(f"final headers {redact_headers(headers)}")
+    return headers
+
+
+def _detect_streaming(method: str, body: bytes) -> bool:
+    """Return True if request body indicates SSE streaming."""
+    if method.lower() == "post" and body:
+        try:
+            return json.loads(body).get("stream") is True
+        except (json.JSONDecodeError, AttributeError):
+            pass
+    return False
+
+
+def _emit_completions_metrics(
+    response_data: dict,
+    request: Request,
+    start_time: float,
+    body: bytes,
+    path: str,
+    provider_prefix: str | None,
+    currency: str | None,
+    pricing_cache,
+) -> None:
+    """Emit Prometheus metrics and tracing for a non-streaming completions response."""
+    if "completions" not in path:
+        return
+
+    metadata = ChainMetadataForTracking(
+        chain_type=ChainType.prompt,
+        chain_name="proxy",
+        group_id=request.headers.get("x-group-id", "unknown"),
+    )
+
+    # Resolve pricing if not already known
+    pfx, cur = provider_prefix, currency
+    if not pfx and pricing_cache:
+        model_name = response_data.get("model", "")
+        usage = response_data.get("usage", {})
+        found = pricing_cache.find_cost(
+            model_name,
+            usage.get("prompt_tokens", 0),
+            usage.get("completion_tokens", 0),
+        )
+        if found:
+            pfx, cur, _ = found
+
+    try:
+        MetricsCallbackHandler(
+            metadata,
+            provider_prefix=pfx,
+            currency=cur,
+            pricing_cache=pricing_cache,
+        ).on_llm_end(response_data)
+    except Exception as e:
+        logger.error("Error processing LLM usage metrics", exc_info=e)
+
+    duration_ms = (time.time() - start_time) * 1000
+    try:
+        input_body = json.loads(body) if body else None
+    except (json.JSONDecodeError, AttributeError):
+        input_body = None
+    trace_proxy_request(
+        model=response_data.get("model", ""),
+        provider=pfx,
+        input_body=input_body,
+        output_body=response_data,
+        status_code=200,
+        usage=response_data.get("usage"),
+        duration_ms=duration_ms,
+        group_id=request.headers.get("x-group-id", "unknown"),
+        is_streaming=False,
+    )
+
+
+def _make_error_response(response, provider_label: str | None = None) -> JSONResponse:
+    """Build a standardised error JSONResponse from a failed upstream response."""
+    response_dict = extract_content(response)
+    log_details: dict = {
+        "status_code": response.status_code,
+        "response": response_dict,
+    }
+    if provider_label:
+        log_details["provider"] = provider_label
+    logger.error("Proxy error details", details=log_details)
+    return JSONResponse(
+        content={
+            "error": {
+                "status_code": response.status_code,
+                "message": response_dict.get("message", "Proxy request failed"),
+                "details": {"response": response_dict},
+            }
+        },
+        status_code=response.status_code,
+    )
+
+
+async def _do_proxy_request(
+    client: AsyncClient,
+    target_url: str,
+    method: str,
+    headers: dict[str, str],
+    body: bytes,
+    path: str,
+    request: Request,
+    provider_prefix: str | None = None,
+    provider_currency: str | None = None,
+    pricing_cache=None,
+    cb: CircuitBreaker | None = None,
+    max_retries: int | None = None,
+    base_delay: float | None = None,
+    backoff_factor: float | None = None,
+) -> JSONResponse | StreamingResponse:
+    """Core proxy logic shared by legacy single-provider and multi-provider paths."""
+    is_streaming = _detect_streaming(method, body)
+
+    if is_streaming:
+        return await _handle_streaming_request(
+            client=client,
+            target_url=target_url,
+            headers=headers,
+            body=body,
+            path=path,
+            request=request,
+            provider_prefix=provider_prefix,
+            provider_currency=provider_currency,
+            pricing_cache=pricing_cache,
+        )
+
+    start_time = time.time()
+    response = await exponential_backoff_retry(
+        client.request,
+        method,
+        target_url,
+        headers=headers,
+        content=body,
+        cb=cb,
+        max_retries=max_retries,
+        base_delay=base_delay,
+        backoff_factor=backoff_factor,
+    )
+
+    if isinstance(response, HTTPXResponse) and response.status_code in _SUCCESS_STATUS_CODES:
+        logger.debug(f"Proxy request successful: {method} {target_url} -> {response.status_code}")
+
+        if "completions" in path:
+            response_data = json.loads(response.text)
+            _emit_completions_metrics(
+                response_data, request, start_time, body, path,
+                provider_prefix, provider_currency, pricing_cache,
+            )
+
+        return JSONResponse(
+            content=extract_content(response),
+            status_code=response.status_code,
+        )
+
+    return _make_error_response(response, provider_label=provider_prefix)
+
+
+# ---------------------------------------------------------------------------
+# Public entry-points (kept for backward-compat with app.py and tests)
+# ---------------------------------------------------------------------------
+
 async def proxy_request_with_retries(client: AsyncClient, path: str, request: Request, custom_headers: dict[str, str] | None = None, pricing_cache=None):
     custom_headers = custom_headers or {}
     target_url = f"{settings.proxy_target_url}/{path}"
     if request.url.query:
         target_url = f"{target_url}?{request.url.query}"
-    method = request.method
-    headers = dict(request.headers)
-    logger.debug(f"original headers {redact_headers(headers)}")
-    exclude = _get_exclude_header_patterns()
-    headers = {k: v for k, v in headers.items() if not any(fnmatch.fnmatch(k.lower(), pattern) for pattern in exclude)}
-    logger.debug(f"cleaned headers {redact_headers(headers)}")
-    headers.update(custom_headers)
-    headers["accept-encoding"] = "identity"
-    logger.debug(f"final headers {redact_headers(headers)}")
+
+    headers = _prepare_proxy_headers(request, custom_headers)
 
     try:
+        method = request.method
         if method.lower() == "post" and headers.get("content-type", "").lower().startswith("multipart/form-data"):
-            response = await stream_multipart_post(request, client, target_url, headers=headers)
-            return response
+            return await stream_multipart_post(request, client, target_url, headers=headers)
 
         body = await request.body()
 
-        # Detect streaming requests (e.g. POST /completions with "stream": true)
-        is_streaming = False
-        if method.lower() == "post" and body:
-            try:
-                body_json = json.loads(body)
-                is_streaming = body_json.get("stream") is True
-            except (json.JSONDecodeError, AttributeError):
-                pass
-
-        if is_streaming:
-            return await _handle_streaming_request(
-                client=client, target_url=target_url, headers=headers,
-                body=body, path=path, request=request,
-                pricing_cache=pricing_cache,
-            )
-
-        start_time = time.time()
-        response = await exponential_backoff_retry(
-            client.request, method, target_url, headers=headers, content=body
+        return await _do_proxy_request(
+            client=client,
+            target_url=target_url,
+            method=method,
+            headers=headers,
+            body=body,
+            path=path,
+            request=request,
+            pricing_cache=pricing_cache,
         )
-
-        if isinstance(response, HTTPXResponse) and response.status_code in _SUCCESS_STATUS_CODES:
-            logger.debug(f"Proxy request successful: {method} {target_url} -> {response.status_code}")
-
-            if 'completions' in path:
-                response_data = json.loads(response.text)
-                metadata = ChainMetadataForTracking(
-                    chain_type=ChainType.prompt,
-                    chain_name="proxy",
-                    group_id=request.headers.get("x-group-id", "unknown"))
-
-                # Resolve pricing from any provider
-                provider_prefix = None
-                currency = None
-                if pricing_cache:
-                    model_name = response_data.get("model", "")
-                    usage = response_data.get("usage", {})
-                    found = pricing_cache.find_cost(
-                        model_name,
-                        usage.get("prompt_tokens", 0),
-                        usage.get("completion_tokens", 0),
-                    )
-                    if found:
-                        provider_prefix, currency, _ = found
-
-                llm_usage_metrics_handler = MetricsCallbackHandler(
-                    metadata,
-                    provider_prefix=provider_prefix,
-                    currency=currency,
-                    pricing_cache=pricing_cache,
-                )
-                try:
-                    llm_usage_metrics_handler.on_llm_end(response_data)
-                except Exception as e:
-                    logger.error("Error processing LLM usage metrics", exc_info=e)
-
-                duration_ms = (time.time() - start_time) * 1000
-                try:
-                    input_body = json.loads(body) if body else None
-                except (json.JSONDecodeError, AttributeError):
-                    input_body = None
-                trace_proxy_request(
-                    model=response_data.get("model", ""),
-                    provider=None,
-                    input_body=input_body,
-                    output_body=response_data,
-                    status_code=response.status_code,
-                    usage=response_data.get("usage"),
-                    duration_ms=duration_ms,
-                    group_id=request.headers.get("x-group-id", "unknown"),
-                    is_streaming=False,
-                )
-
-            return JSONResponse(
-                content=extract_content(response),
-                status_code=response.status_code,
-            )
-
-        else:
-            response_dict = extract_content(response)
-            logger.error("Proxy error details", details={
-                "status_code": response.status_code,
-                "target_url": target_url,
-                "method": method,
-                "headers": redact_headers(headers),
-                "response": response_dict,
-                "circuit_breaker_state": "open" if response.status_code == 503 else "unknown",
-            })
-            error_response = {
-                "error": {
-                    "status_code": response.status_code,
-                    "message": response_dict.get("message", "Proxy request failed"),
-                    "details": {
-                        "response": response_dict,
-                        "circuit_breaker_state": "open" if response.status_code == 503 else "unknown",
-                    }
-                }
-            }
-            return JSONResponse(content=error_response, status_code=response.status_code)
 
     except Exception as e:
         logger.error("Proxy exception", details={
             "target_url": target_url,
-            "method": method,
+            "method": request.method,
             "exception": str(e),
             "exception_type": type(e).__name__
         })
@@ -605,104 +687,27 @@ async def proxy_request_to_provider(
     if request.url.query:
         target_url = f"{target_url}?{request.url.query}"
 
-    method = request.method
-    headers = dict(request.headers)
-    exclude = _get_exclude_header_patterns()
-    headers = {k: v for k, v in headers.items() if not any(fnmatch.fnmatch(k.lower(), p) for p in exclude)}
-    headers.update(auth_headers)
-    headers["accept-encoding"] = "identity"
+    headers = _prepare_proxy_headers(request, auth_headers)
 
     try:
         body = await request.body()
         body = _strip_model_prefix(body, original_model, stripped_model)
 
-        is_streaming = False
-        if method.lower() == "post" and body:
-            try:
-                body_json = json.loads(body)
-                is_streaming = body_json.get("stream") is True
-            except (json.JSONDecodeError, AttributeError):
-                pass
-
-        if is_streaming:
-            return await _handle_streaming_request(
-                client=provider.client,
-                target_url=target_url,
-                headers=headers,
-                body=body,
-                path=path,
-                request=request,
-                provider_prefix=config.prefix,
-                provider_currency=config.currency,
-                pricing_cache=pricing_cache,
-            )
-
-        start_time = time.time()
-        response = await exponential_backoff_retry(
-            provider.client.request,
-            method,
-            target_url,
+        return await _do_proxy_request(
+            client=provider.client,
+            target_url=target_url,
+            method=request.method,
             headers=headers,
-            content=body,
+            body=body,
+            path=path,
+            request=request,
+            provider_prefix=config.prefix,
+            provider_currency=config.currency,
+            pricing_cache=pricing_cache,
             cb=provider.circuit_breaker,
             max_retries=config.max_retries,
             base_delay=config.base_delay,
             backoff_factor=config.backoff_factor,
-        )
-
-        if isinstance(response, HTTPXResponse) and response.status_code in _SUCCESS_STATUS_CODES:
-            if "completions" in path:
-                response_data = json.loads(response.text)
-                metadata = ChainMetadataForTracking(
-                    chain_type=ChainType.prompt,
-                    chain_name="proxy",
-                    group_id=request.headers.get("x-group-id", "unknown"),
-                )
-                try:
-                    MetricsCallbackHandler(
-                        metadata,
-                        provider_prefix=config.prefix,
-                        currency=config.currency,
-                        pricing_cache=pricing_cache,
-                    ).on_llm_end(response_data)
-                except Exception as e:
-                    logger.error("Error processing LLM usage metrics", exc_info=e)
-
-                duration_ms = (time.time() - start_time) * 1000
-                try:
-                    input_body = json.loads(body) if body else None
-                except (json.JSONDecodeError, AttributeError):
-                    input_body = None
-                trace_proxy_request(
-                    model=response_data.get("model", ""),
-                    provider=config.prefix,
-                    input_body=input_body,
-                    output_body=response_data,
-                    status_code=response.status_code,
-                    usage=response_data.get("usage"),
-                    duration_ms=duration_ms,
-                    group_id=request.headers.get("x-group-id", "unknown"),
-                    is_streaming=False,
-                )
-
-            return JSONResponse(content=extract_content(response), status_code=response.status_code)
-
-        response_dict = extract_content(response)
-        logger.error("Provider proxy error", details={
-            "provider": config.prefix,
-            "status_code": response.status_code,
-            "target_url": target_url,
-            "response": response_dict,
-        })
-        return JSONResponse(
-            content={
-                "error": {
-                    "status_code": response.status_code,
-                    "message": response_dict.get("message", "Proxy request failed"),
-                    "details": {"response": response_dict},
-                }
-            },
-            status_code=response.status_code,
         )
 
     except Exception as e:

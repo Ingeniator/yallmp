@@ -246,4 +246,12 @@ class StaticChainStore(ChainStore):
         }
         return filtered_data
 
-chainStore = StaticChainStore(settings.chain_hub_directory)
+_chainStore = None
+
+
+def get_chain_store() -> StaticChainStore:
+    """Lazy factory — only instantiate when the feature is actually used."""
+    global _chainStore
+    if _chainStore is None:
+        _chainStore = StaticChainStore(settings.chain_hub_directory)
+    return _chainStore
