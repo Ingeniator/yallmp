@@ -148,9 +148,7 @@ class StaticChainStore(ChainStore):
         return await self.execute_chain(chain=LLMChain(llm=llm, prompt=PromptTemplate(input_variables=[],template=prompt)), model_name=model_name, metadata=metadata)
 
     async def get_default_available_chat_models(self, exclude: str | None = None):
-        if exclude in self.default_available_chat_models:
-            self.default_available_chat_models.remove(exclude)
-        return self.default_available_chat_models
+        return [m for m in self.default_available_chat_models if m != exclude]
 
     async def execute_chain(self, chain: LLMChain, model_name: str | None = None, variables: dict | None = None, metadata: ChainMetadataForTracking | None = None) -> str:
         variables = variables or {}
