@@ -3,25 +3,62 @@ from fastapi import FastAPI, Depends, Request
 from app.core.config import settings
 from app.core.logging_config import setup_logging
 from app.middlewares.logging_middleware import LoggingMiddleware
-from app.middlewares.metrics_middleware import PrometheusMiddleware, metrics
+from app.middlewares.metrics_middleware import PrometheusMiddleware, get_metrics_registry
 from app.schemas.health import HealthCheck
 from app.schemas.prompt import ChainMetadataForTracking, ChainType
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, HTMLResponse, Response
 from contextlib import asynccontextmanager
+import json
+import pathlib
 
 logger = setup_logging()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    logger.info("Application startup...")
     client = None
     if settings.proxy_enabled:
         from app.core.proxy import create_async_client
         client = await create_async_client()
-    
+
     app.state.client = client
+
+    # Initialize LLM Hub if enabled
+    llm_hub = None
+    if settings.llm_hub_enabled:
+        from app.services.llm_hub import LlmHub
+        llm_hub = LlmHub()
+        llm_hub.load_providers()
+        await llm_hub.startup()
+
+    app.state.llm_hub = llm_hub
+
+    # Initialize pricing cache
+    pricing_cache = None
+    if llm_hub and llm_hub.providers:
+        from app.services.pricing import PricingCache
+        pricing_cache = PricingCache(llm_hub.providers)
+        await pricing_cache.startup()
+    elif settings.proxy_pricing_config:
+        from app.services.pricing import PricingCache
+        pricing_cache = PricingCache.from_json(settings.proxy_pricing_config)
+
+    app.state.pricing_cache = pricing_cache
+
     yield
+
+    if pricing_cache:
+        await pricing_cache.shutdown()
+
+    from app.services.tracing import shutdown as tracing_shutdown
+    tracing_shutdown()
+
+    if llm_hub:
+        await llm_hub.shutdown()
     if app.state.client:
         await app.state.client.aclose()
+    logger.info("Application shutdown...")
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
@@ -40,76 +77,196 @@ def create_app() -> FastAPI:
     app.add_middleware(PrometheusMiddleware)
 
     # Expose metrics endpoint
+    from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
     @app.get("/metrics")
     async def get_metrics():
-        return await metrics()
+        return Response(content=generate_latest(get_metrics_registry()), media_type=CONTENT_TYPE_LATEST)
+
+    @app.get("/livez")
+    async def livez():
+        """Liveness probe — process is alive, no dependency checks."""
+        return {"status": "ok"}
+
+    @app.get("/ready")
+    async def ready():
+        """Readiness probe — returns 200 if all enabled components are healthy, 503 otherwise."""
+        from app.core.proxy import circuit_breaker
+
+        components = {
+            "proxy": "ok" if settings.proxy_enabled else "disabled",
+            "llm_hub": "ok" if settings.llm_hub_enabled else "disabled",
+            "chain_hub": "ok" if settings.chain_hub_enabled else "disabled",
+            "prompt_hub": "ok" if settings.prompt_hub_enabled else "disabled",
+            "dashboard": "ok" if settings.dashboard_enabled else "disabled",
+        }
+
+        if settings.proxy_enabled:
+            cb_status = await circuit_breaker.get_status()
+            if cb_status["circuit_open"]:
+                components["proxy"] = "degraded"
+
+        llm_hub = getattr(app.state, "llm_hub", None)
+        if settings.llm_hub_enabled and llm_hub and llm_hub.providers:
+            for prefix, provider in llm_hub.providers.items():
+                cb = await provider.circuit_breaker.get_status()
+                if cb["circuit_open"]:
+                    components["llm_hub"] = "degraded"
+                    break
+
+        enabled = {k: v for k, v in components.items() if v != "disabled"}
+        if all(v == "ok" for v in enabled.values()):
+            return Response(status_code=200)
+        return Response(status_code=503)
 
     @app.get("/health")
     async def health_check() -> HealthCheck:
-        """Check the health of the service and its components."""
+        """Full health status with component details — for dashboards and monitoring."""
+        from app.core.proxy import circuit_breaker
+
         components = {
             "proxy": "ok" if settings.proxy_enabled else "disabled",
+            "llm_hub": "ok" if settings.llm_hub_enabled else "disabled",
             "chain_hub": "ok" if settings.chain_hub_enabled else "disabled",
-            "prompt_hub": "ok" if settings.prompt_hub_enabled else "disabled"
+            "prompt_hub": "ok" if settings.prompt_hub_enabled else "disabled",
+            "dashboard": "ok" if settings.dashboard_enabled else "disabled",
         }
-        
-        status = "ok" if all(v == "ok" for v in components.values()) else "degraded"
-        
+
+        details: dict = {}
+
+        # Check circuit breaker state (legacy single-provider proxy)
+        if settings.proxy_enabled:
+            cb_status = await circuit_breaker.get_status()
+            if cb_status["circuit_open"]:
+                components["proxy"] = "degraded"
+                details["proxy"] = {"circuit_breaker": "open"}
+
+        # Check LLM Hub providers — probe each provider's circuit breaker
+        llm_hub = getattr(app.state, "llm_hub", None)
+        if settings.llm_hub_enabled and llm_hub and llm_hub.providers:
+            provider_statuses = {}
+            for prefix, provider in llm_hub.providers.items():
+                cb = await provider.circuit_breaker.get_status()
+                if cb["circuit_open"]:
+                    provider_statuses[prefix] = "circuit_open"
+                else:
+                    provider_statuses[prefix] = "ok"
+
+            if any(v != "ok" for v in provider_statuses.values()):
+                if all(v != "ok" for v in provider_statuses.values()):
+                    components["llm_hub"] = "degraded"
+                else:
+                    components["llm_hub"] = "degraded"
+                details["llm_hub_providers"] = provider_statuses
+
+        enabled = {k: v for k, v in components.items() if v != "disabled"}
+        status = "ok" if all(v == "ok" for v in enabled.values()) else "degraded"
+
         return HealthCheck(
             status=status,
             components=components,
-            version=settings.version
+            version=settings.version,
+            details=details if details else None,
         )
 
+    if settings.dashboard_enabled:
+        from app.services.dashboard import get_dashboard_json
+
+        _dashboard_html = pathlib.Path(__file__).resolve().parent.parent.joinpath(
+            "templates", "dashboard.html"
+        ).read_text()
+
+        @app.get("/dashboard")
+        async def dashboard():
+            return HTMLResponse(content=_dashboard_html)
+
+        @app.get("/dashboard/api/metrics")
+        async def dashboard_api_metrics(request: Request):
+            group_id = request.headers.get("x-group-id")
+            is_org_admin = request.headers.get("x-role", "").upper() == "ORG_ADMIN"
+            return await get_dashboard_json(group_id=group_id, is_org_admin=is_org_admin)
+
+
     if settings.proxy_enabled:
-        from app.core.proxy import proxy_request_with_retries, get_model_version
+        from app.core.proxy import proxy_request_with_retries, get_model_version, proxy_request_to_provider
         from app.services.llm_authentication import get_authorization_headers
-        
+
         async def add_authz_header():
             return await get_authorization_headers(app.state.client)
 
         @app.api_route("/llm/version", methods=["GET"])
         async def get_llm_version(request: Request, custom_headers: dict[str, str] = Depends(add_authz_header), model_name: str = "GigaChat"):
             return await get_model_version(model_name, app.state.client, request, custom_headers)
-        
+
+        # Models endpoint — must be registered BEFORE the catch-all /llm/{path}
+        @app.get("/llm/v1/models")
+        async def get_models(request: Request, custom_headers: dict[str, str] = Depends(add_authz_header)):
+            llm_hub = app.state.llm_hub
+            if llm_hub and llm_hub.providers:
+                return JSONResponse(content=llm_hub.get_merged_models())
+            # Fallback: proxy to upstream
+            return await proxy_request_with_retries(app.state.client, "v1/models", request, custom_headers)
+
         @app.api_route("/llm/{full_path:path}", methods=["GET", "POST"])
         async def proxy_request(full_path: str, request: Request, custom_headers: dict[str, str] = Depends(add_authz_header)):
-            return await proxy_request_with_retries(app.state.client, full_path, request, custom_headers)
+            llm_hub = app.state.llm_hub
+
+            # Multi-provider routing for POST requests when hub is enabled
+            if request.method == "POST" and llm_hub and llm_hub.providers:
+                body = await request.body()
+                try:
+                    body_json = json.loads(body)
+                    model = body_json.get("model", "")
+                except (json.JSONDecodeError, AttributeError):
+                    model = ""
+
+                if model:
+                    resolved = llm_hub.resolve_model(model)
+                    if resolved:
+                        provider, stripped_model = resolved
+                        provider_headers = await provider.get_auth_headers()
+                        return await proxy_request_to_provider(
+                            provider=provider,
+                            path=full_path,
+                            request=request,
+                            auth_headers=provider_headers,
+                            original_model=model,
+                            stripped_model=stripped_model,
+                            pricing_cache=app.state.pricing_cache,
+                        )
+
+            # Legacy single-provider path
+            return await proxy_request_with_retries(app.state.client, full_path, request, custom_headers, pricing_cache=app.state.pricing_cache)
 
     if settings.prompt_hub_enabled:
-        from app.services.prompt_manager import promptStore, PromptVariables
+        from app.services.prompt_manager import get_prompt_store
+        from app.schemas.prompt import PromptVariables as _PromptVars
+
         @app.get("/prompts")
         async def get_prompts(category: str | None = None):
-            return await promptStore.get_prompts(category)
+            return await get_prompt_store().get_prompts(category)
 
         @app.post("/prompt/format/{name}")
-        async def format_prompt(name: str, data: PromptVariables):
-            return await promptStore.format_prompt(name, data)
+        async def format_prompt(name: str, data: _PromptVars):
+            return await get_prompt_store().format_prompt(name, data)
 
     if settings.chain_hub_enabled:
-        from app.services.chain_manager import chainStore, PromptVariables
+        from app.services.chain_manager import get_chain_store
+        from app.schemas.prompt import PromptVariables
+
         @app.get("/chains")
         async def get_chains(category: str | None = None):
-            return await chainStore.get_chains(category)
+            return await get_chain_store().get_chains(category)
 
         @app.post("/chain/execute/{name}")
         async def chain_execute(request: Request, name: str, data: PromptVariables, model_name: str = None):
             metadata = ChainMetadataForTracking(chain_type=ChainType.chain, chain_name = name, group_id = request.headers.get("x-group-id", "unknown"))
-            return await chainStore.execute(name, data, model_name, metadata)
-    
+            return await get_chain_store().execute(name, data, model_name, metadata)
+
     if settings.prompt_hub_enabled and settings.chain_hub_enabled:
         @app.post("/prompt/execute/{name}")
         async def execute_prompt(request: Request, name: str, data: PromptVariables, model_name: str = None):
-            prompt = await promptStore.format_prompt(name, data)
+            prompt = await get_prompt_store().format_prompt(name, data)
             metadata = ChainMetadataForTracking(chain_type=ChainType.prompt, chain_name = name, group_id = request.headers.get("x-group-id", "unknown"))
-            return await chainStore.execute_prompt(prompt=prompt, model_name=model_name, metadata=metadata)
-
-    @app.on_event("startup")
-    async def startup_event():
-        logger.info("Application startup...")
-
-    @app.on_event("shutdown")
-    async def shutdown_event():
-        logger.info("Application shutdown...")
+            return await get_chain_store().execute_prompt(prompt=prompt, model_name=model_name, metadata=metadata)
 
     return app

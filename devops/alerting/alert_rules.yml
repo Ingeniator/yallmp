@@ -1,0 +1,191 @@
+# Prometheus alerting rules for yallmp
+# Add to your Prometheus config:  rule_files: ["alert_rules.yml"]
+
+groups:
+  # ── HTTP Error Rate ──────────────────────────────────────────────────
+  - name: yallmp_error_rate
+    rules:
+      - alert: HighErrorRate5xx
+        expr: |
+          (
+            sum(rate(http_requests_total{status_code=~"5.."}[5m]))
+            /
+            sum(rate(http_requests_total[5m]))
+          ) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+          service: yallmp
+        annotations:
+          summary: "High 5xx error rate ({{ $value | humanizePercentage }})"
+          description: "More than 5% of requests are returning 5xx errors over the last 5 minutes."
+
+      - alert: HighErrorRate5xxByEndpoint
+        expr: |
+          (
+            sum by (endpoint) (rate(http_requests_total{status_code=~"5.."}[5m]))
+            /
+            sum by (endpoint) (rate(http_requests_total[5m]))
+          ) > 0.10
+        for: 2m
+        labels:
+          severity: warning
+          service: yallmp
+        annotations:
+          summary: "High 5xx error rate on {{ $labels.endpoint }} ({{ $value | humanizePercentage }})"
+          description: "Endpoint {{ $labels.endpoint }} has >10% 5xx error rate."
+
+  # ── Circuit Breaker ──────────────────────────────────────────────────
+  - name: yallmp_circuit_breaker
+    rules:
+      - alert: CircuitBreakerOpen
+        expr: |
+          (
+            sum(rate(http_requests_total{status_code="503"}[2m]))
+            /
+            sum(rate(http_requests_total[2m]))
+          ) > 0.01
+        for: 1m
+        labels:
+          severity: critical
+          service: yallmp
+        annotations:
+          summary: "Circuit breaker likely open — elevated 503 responses"
+          description: "More than 1% of requests are returning 503 (circuit breaker / service unavailable) over the last 2 minutes."
+
+      - alert: UpstreamFailureSpike
+        expr: |
+          sum(rate(http_requests_total{status_code=~"502|503|504"}[5m])) > 0.5
+        for: 2m
+        labels:
+          severity: warning
+          service: yallmp
+        annotations:
+          summary: "Upstream failure spike ({{ $value | humanize }} req/s)"
+          description: "Elevated upstream errors (502/503/504) — may trigger circuit breaker soon."
+
+  # ── Latency (P95 Degradation) ───────────────────────────────────────
+  - name: yallmp_latency
+    rules:
+      - alert: HighP95Latency
+        expr: |
+          histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))
+          > 10
+        for: 5m
+        labels:
+          severity: warning
+          service: yallmp
+        annotations:
+          summary: "P95 latency above 10s ({{ $value | humanizeDuration }})"
+          description: "Overall P95 request latency has exceeded 10 seconds for 5 minutes."
+
+      - alert: HighP95LatencyByEndpoint
+        expr: |
+          histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, endpoint))
+          > 15
+        for: 5m
+        labels:
+          severity: warning
+          service: yallmp
+        annotations:
+          summary: "P95 latency on {{ $labels.endpoint }} above 15s"
+          description: "Endpoint {{ $labels.endpoint }} P95 latency is {{ $value | humanizeDuration }}."
+
+      - alert: HighP99Latency
+        expr: |
+          histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))
+          > 30
+        for: 5m
+        labels:
+          severity: critical
+          service: yallmp
+        annotations:
+          summary: "P99 latency above 30s ({{ $value | humanizeDuration }})"
+          description: "P99 request latency exceeds 30 seconds — possible upstream stall or runaway request."
+
+  # ── LLM Cost Anomaly Detection ──────────────────────────────────────
+  - name: yallmp_cost
+    rules:
+      - alert: LLMCostSpike
+        expr: |
+          sum(rate(llm_cost_total[5m])) > 3 * sum(rate(llm_cost_total[1h] offset 5m))
+        for: 5m
+        labels:
+          severity: critical
+          service: yallmp
+        annotations:
+          summary: "LLM cost spike detected — 3x above hourly baseline"
+          description: "Current cost rate is 3x the previous hourly average. Possible runaway loop or prompt injection causing excessive token usage."
+
+      - alert: LLMCostSpikeByProvider
+        expr: |
+          sum by (provider) (rate(llm_cost_total[5m]))
+          > 3 * sum by (provider) (rate(llm_cost_total[1h] offset 5m))
+        for: 5m
+        labels:
+          severity: warning
+          service: yallmp
+        annotations:
+          summary: "LLM cost spike on provider {{ $labels.provider }}"
+          description: "Provider {{ $labels.provider }} cost rate is 3x above its hourly baseline."
+
+      - alert: HighTokenBurnRate
+        expr: |
+          sum(rate(llm_total_token_usage_total[5m])) > 3 * sum(rate(llm_total_token_usage_total[1h] offset 5m))
+        for: 5m
+        labels:
+          severity: warning
+          service: yallmp
+        annotations:
+          summary: "Token usage spike — 3x above hourly baseline"
+          description: "Total token consumption rate has tripled compared to the previous hour. Investigate for runaway loops."
+
+  # ── Health Check ────────────────────────────────────────────────────
+  - name: yallmp_health
+    rules:
+      - alert: HealthCheckFailing
+        expr: |
+          probe_success{job="yallmp"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: yallmp
+        annotations:
+          summary: "yallmp health check failing"
+          description: "The /health endpoint has been unreachable or returning errors for over 1 minute."
+
+      - alert: HealthCheckSlow
+        expr: |
+          probe_duration_seconds{job="yallmp"} > 5
+        for: 2m
+        labels:
+          severity: warning
+          service: yallmp
+        annotations:
+          summary: "Health check response time > 5s"
+          description: "The /health endpoint is responding slowly ({{ $value | humanizeDuration }}), indicating potential resource exhaustion."
+
+      - alert: ServiceDegraded
+        expr: |
+          up{job="yallmp"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: yallmp
+        annotations:
+          summary: "yallmp instance down"
+          description: "Prometheus cannot scrape the yallmp /metrics endpoint."
+
+  # ── Request Volume Anomalies ────────────────────────────────────────
+  - name: yallmp_traffic
+    rules:
+      - alert: NoTraffic
+        expr: |
+          sum(rate(http_requests_total[5m])) == 0
+        for: 10m
+        labels:
+          severity: warning
+          service: yallmp
+        annotations:
+          summary: "No HTTP traffic for 10 minutes"
+          description: "Zero requests recorded — possible routing issue or upstream misconfiguration."

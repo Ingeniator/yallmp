@@ -16,33 +16,17 @@ K8S_DIR := k8s/
 CYAN  := \033[36m
 RESET := \033[0m
 
+UV := python3.12 -m uv
 ## ---------- General Commands ----------
 
 .PHONY: help
 help:  ## Show available commands
 	@echo "$(CYAN)Available commands:$(RESET)"
 	@grep -E '^[a-zA-Z_-]+:.*##' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "$(CYAN)%-15s$(RESET) %s\n", $$1, $$2}'
-
-## ---------- Local Development ----------
-.PHONY: dev-init
-dev-init:  ## Initialize development environment
-	python3 -m uv venv
-	python3 -m uv pip install --dev
-	python3 -m uv run pre-commit install
-
-.PHONY: run
-run:  ## Run application
-	mkdir -p /tmp/metrics
-	python3 -m uv run entrypoint.py
-
-.PHONY: run-fake-llm
-run-fake-llm:  ## Run fake LLM application
-	python3 -m uv run fake_llm_entrypoint.py
-
 ## ---------- Snaphot ---------------
 .PHONY: snapshot-create
 snapshot-create:
-	 find . -type f -not -path './dev/*' -not -path './uv.lock' -not -path './.git/*' -not -path '**/__pycache__/*' -not -path '**/.DS_Store' -not -path './.venv/*' -not -path './.*' -exec bash -c 'printf "\n>>> %s\n" "{}"; cat "{}"' \; > ./.snapshot.txt
+	 find . -type f -not -path './dev/*' -not -path './tests/load/node_modules/*' -not -path './uv.lock' -not -path './.git/*' -not -path '**/__pycache__/*' -not -path '**/.DS_Store' -not -path './.venv/*' -not -path './.*' -exec bash -c 'printf "\n>>> %s\n" "{}"; cat "{}"' \; > ./.snapshot.txt
 
 .PHONY: snapshot-restore
 snapshot-restore:
@@ -86,15 +70,37 @@ snapshot-restore:
 			}\
 		}\
 	' "$(SNAPSHOT)"
+## ---------- Local Development ----------
+.PHONY: dev-init
+dev-init:  ## Initialize development environment
+	${UV} venv
+	${UV} pip install --dev
+	${UV} run pre-commit install
+
+.PHONY: run
+run:  ## Run application
+	mkdir -p /tmp/metrics
+	${UV} run entrypoint.py
+
+.PHONY: run-fake-llm
+run-fake-llm:  ## Run fake LLM application
+
+.PHONY: call-llm
+call-llm:  ## Example chat completion call to the proxy (GROUP_ID=mygroup)
+	curl -s http://localhost:5005/ai/llm/v1/chat/completions \
+		-H "Content-Type: application/json" \
+		-H "x-group-id: $(GROUP_ID)" \
+		-d '{"model": "thebloke/tinyllama-1.1b-chat-v1.0", "messages": [{"role": "user", "content": "Say hello in one sentence."}]}' | python3 -m json.tool
+
 ## ---------- Code Quality ----------
 
 .PHONY: lint
 lint:  ## Run auto-formatting and linting
-	python3 -m uv run ruff check --fix .
+	${UV} run ruff check --fix .
 
 .PHONY: commit
 commit: ## make commit using commitizen
-	python3 -m uv run cz c
+	${UV} run cz c
 
 .PHONY: push
 push: ## make commit using commitizen
@@ -104,11 +110,11 @@ push: ## make commit using commitizen
 
 .PHONY: test
 test:  ## Run tests
-	pytest
+	${UV} run pytest tests/ -v
 
 .PHONY: test-coverage
 test-coverage:  ## Run tests with coverage report
-	pytest --cov=.
+	${UV} run pytest tests/ --cov=app --cov-report=term-missing
 
 ## ---------- Deployment ----------
 

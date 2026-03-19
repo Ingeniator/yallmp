@@ -1,0 +1,112 @@
+# Alertmanager configuration for ai-suite (yallmp, llogr, checkr)
+# Customize receivers with your actual notification endpoints.
+
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: default
+  group_by: [alertname, service]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+  routes:
+    # Critical alerts — immediate notification
+    - match:
+        severity: critical
+      receiver: critical
+      group_wait: 10s
+      repeat_interval: 1h
+
+    # Cost anomalies — separate channel for budget owners
+    - match:
+        alertname: LLMCostSpike
+      receiver: cost-alerts
+      group_wait: 10s
+      repeat_interval: 30m
+
+    - match:
+        alertname: LLMCostSpikeByProvider
+      receiver: cost-alerts
+      repeat_interval: 1h
+
+    # llogr data-loss alerts — immediate notification
+    - match_re:
+        alertname: "LlogrS3SaveErrors|LlogrClickstreamForwardErrors"
+      receiver: data-loss
+      group_wait: 10s
+      repeat_interval: 30m
+
+    # checkr validation quality alerts
+    - match_re:
+        alertname: "CheckrGateFailureSpike|CheckrValidationErrorSpike"
+      receiver: validation-alerts
+      repeat_interval: 2h
+
+inhibit_rules:
+  # If the service is completely down, suppress endpoint-level alerts
+  - source_match:
+      alertname: ServiceDegraded
+    target_match_re:
+      alertname: "High.*|CircuitBreaker.*|NoTraffic"
+    equal: [service]
+
+  # If llogr is down, suppress storage-level alerts
+  - source_match:
+      alertname: LlogrServiceDown
+    target_match_re:
+      alertname: "LlogrS3.*|LlogrClickstream.*|LlogrIngestion.*|LlogrNoTraffic"
+    equal: [service]
+
+  # If checkr is down, suppress validation-level alerts
+  - source_match:
+      alertname: CheckrServiceDown
+    target_match_re:
+      alertname: "CheckrGate.*|CheckrValidation.*|CheckrNoTraffic|CheckrLLMBackend.*"
+    equal: [service]
+
+  # If yallmp LLM backend is down, suppress checkr gate latency alerts (gates 7-8 depend on it)
+  - source_match:
+      alertname: CheckrLLMBackendDown
+    target_match_re:
+      alertname: "CheckrGateSlowExecution|CheckrGateCriticalLatency"
+    equal: [service]
+
+receivers:
+  - name: default
+    # TODO: configure your default notification channel
+    # slack_configs:
+    #   - api_url: "https://hooks.slack.com/services/XXX/YYY/ZZZ"
+    #     channel: "#yallmp-alerts"
+    #     title: '{{ .GroupLabels.alertname }}'
+    #     text: '{{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+
+  - name: critical
+    # TODO: configure critical notification channel (PagerDuty, OpsGenie, etc.)
+    # pagerduty_configs:
+    #   - service_key: "<your-service-key>"
+
+  - name: cost-alerts
+    # TODO: configure cost alert channel
+    # slack_configs:
+    #   - api_url: "https://hooks.slack.com/services/XXX/YYY/ZZZ"
+    #     channel: "#llm-cost-alerts"
+    #     title: '{{ .GroupLabels.alertname }}'
+    #     text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
+
+  - name: data-loss
+    # TODO: configure data-loss notification channel (llogr S3/clickstream failures)
+    # slack_configs:
+    #   - api_url: "https://hooks.slack.com/services/XXX/YYY/ZZZ"
+    #     channel: "#llogr-alerts"
+    #     title: '{{ .GroupLabels.alertname }}'
+    #     text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
+
+  - name: validation-alerts
+    # TODO: configure validation alert channel (checkr gate failures)
+    # slack_configs:
+    #   - api_url: "https://hooks.slack.com/services/XXX/YYY/ZZZ"
+    #     channel: "#checkr-alerts"
+    #     title: '{{ .GroupLabels.alertname }}'
+    #     text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'

@@ -1,0 +1,11 @@
+{
+  "endpoint_patterns": [
+    "/ai/llm/.*",
+    ".*/execute/.*"
+  ],
+  "table_columns": {
+    "token_usage": ["metric", "group_id", "model", "value"],
+    "cost": ["provider", "model", "group_id", "currency", "value"],
+    "http_requests": ["method", "endpoint", "status_code", "value"]
+  }
+}

@@ -9,11 +9,11 @@ class AppSettings(BaseSettings):
     workers: int = 1
     timeout_keep_alive: int = 600
     proxy_connect_timeout: int = 10
-    proxy_read_timeout: int = 60
+    proxy_read_timeout: int = 300
     proxy_write_timeout: int = 30
     proxy_pool_timeout: int|None = None
-    max_connections: int = 20  # Maximum simultaneous connections
-    max_keepalive_connections: int = 10  # Keepalive connections
+    max_connections: int = 100  # Maximum simultaneous connections
+    max_keepalive_connections: int = 20  # Keepalive connections
     host: str = "0.0.0.0"
     port: int = 5000
     allowed_origins: list[str] = ["*"]
@@ -26,6 +26,22 @@ class AppSettings(BaseSettings):
     proxy_enabled: bool = False
     prompt_hub_enabled: bool = False
     chain_hub_enabled: bool = False
+    llm_hub_enabled: bool = False
+    dashboard_enabled: bool = False
+    dashboard_metrics_backend: str = "local"       # "local" or "prometheus"
+    dashboard_prometheus_url: str = ""             # e.g. "http://prometheus:9090"
+    dashboard_prometheus_timeout: int = 10
+
+    # LLM Hub
+    llm_hub_directory: str = "data/llm_hub"
+
+    # Tracing
+    tracing_enabled: bool = False
+    tracing_log_io: bool = True  # True = log messages+response content; False = metadata only
+    tracing_backend: str = "langfuse"  # selects which TraceEmitter to instantiate
+    tracing_host: str | None = None  # e.g. http://llogr:8000
+    tracing_public_key: str | None = None
+    tracing_secret_key: str | None = None
 
     # Logging
     log_level: str = "INFO"
@@ -34,7 +50,7 @@ class AppSettings(BaseSettings):
 
     # Proxy
     proxy_exclude_headers: str = "host,authorization,cookie,x-forwarded-*,jwt-*"
-    proxy_verify_ssl: bool = False
+    proxy_verify_ssl: bool = True
     proxy_ca_bundle_path: str | None = None
     proxy_target_url: str = "http://localhost:8001"  # Target backend server to forward requests
     proxy_authorization_type: str = "BEARER"
@@ -47,11 +63,13 @@ class AppSettings(BaseSettings):
     proxy_oidc_authorization_url: str | None = None
     proxy_oidc_credentials: str | None = None
 
+    proxy_pricing_config: str | None = None  # Path to pricing JSON for legacy proxy mode
+
     proxy_max_retries: int = 5  # Number of retries before circuit breaker
     proxy_base_delay: float = 0.5  # Base delay in seconds
     proxy_backoff_factor: float = 2.0  # Exponential backoff multiplier
     # Circuit breaker configuration
-    proxy_failure_threshold: int = 0  # 0 if circuid breaker disabled. Number of failures before tripping
+    proxy_failure_threshold: int = 0  # 0 if circuit breaker disabled. Number of failures before tripping
     proxy_recovery_time: int = 30  # Cooldown period (seconds)
     proxy_window_size: int = 60  # Sliding window size in seconds
 
@@ -60,7 +78,7 @@ class AppSettings(BaseSettings):
 
     # Chain hub settings
     chain_hub_directory: str = "data/chain_hub"
-    chain_default_base_url: str= ""
+    chain_default_base_url: str = ""
     chain_default_model_name: str = ""
     chain_default_ca_bundle_file: str = ""
     chain_default_verify_ssl_certs: bool = False
@@ -68,7 +86,9 @@ class AppSettings(BaseSettings):
     chain_default_key_file: str = ""
     chain_default_auth_url: str = ""
     chain_default_credentials: str = ""
-    chain_default_json_file: str = "./data/llm_hub/default.json"
+    chain_default_scope: str = "GIGACHAT_API_CORP"
+    chain_default_available_chat_models: list[str] = ["Gigachat:latest", "GigaChat-Pro", "GigaChat-Max", "Gigachat-2:latest", "DeepSeek-R1"]
+    chain_default_json_file: str = "./data/langchain/default.json"
 
     version: str = "0.1.0"
     

@@ -6,6 +6,7 @@ from langchain_classic.chains.loading import load_chain
 from langchain_community.llms.loading import load_llm_from_config
 from app.core.config import settings
 from app.core.logging_config import setup_logging
+from app.core.security import redact_headers
 from app.schemas.prompt import PromptVariables, ChainMetadataForTracking
 from app.services.metrics_callback_handler import MetricsCallbackHandler
 import json
@@ -31,13 +32,20 @@ class ChainStore(ABC):
         """
         pass
     
-    async def get_chains(self) -> list[str]:
-        """Get a list of all available chains.
+    async def get_chains(self) -> dict:
+        """Get all available chains.
 
         Returns:
-            List of chain names
+            Dict of chain names to chain info
         """
         pass
+
+def _redact_response_headers(headers):
+    """Redact sensitive values from response headers (dict or string)."""
+    if isinstance(headers, dict):
+        return redact_headers(headers)
+    # If headers came as a raw string / bytes, drop them entirely
+    return "[REDACTED]"
 
 def safe_parse_gigachat_exception(e):
     def safe_to_str(value):
@@ -63,7 +71,7 @@ def safe_parse_gigachat_exception(e):
             "url": safe_to_str(url),
             "status_code": safe_to_str(status_code),
             "content": safe_to_str(content),
-            "headers": safe_to_str(headers),
+            "headers": _redact_response_headers(headers),
             "message": content_data
         }
     except (json.JSONDecodeError, TypeError) as e:
@@ -72,7 +80,7 @@ def safe_parse_gigachat_exception(e):
             "url": safe_to_str(url),
             "status_code": safe_to_str(status_code),
             "content": safe_to_str(content),
-            "headers": safe_to_str(headers),
+            "headers": _redact_response_headers(headers),
             "message": content_data or str(e),
             "type": type(e).__name__,
         }
@@ -87,11 +95,7 @@ class StaticChainStore(ChainStore):
         self.chains_directory = chains_directory
         self.stored_chains = {}
         self._load_chains()
-        self.default_available_chat_models = [
-            "Gigachat:latest", "GigaChat-Pro", 
-            "GigaChat-Max", "Gigachat-2:latest", 
-            "DeepSeek-R1"
-            ]
+        self.default_available_chat_models = settings.chain_default_available_chat_models
 
     def _load_chains(self):
         """Load all chain files from the chains directory."""
@@ -100,9 +104,13 @@ class StaticChainStore(ChainStore):
 
         for filename in os.listdir(self.chains_directory):
             if filename.endswith('.json'):
-                with open(os.path.join(self.chains_directory, filename), 'r') as f:
-                    chain_data = json.load(f)
                 chain_path = os.path.join(self.chains_directory, filename)
+                try:
+                    with open(chain_path, 'r') as f:
+                        chain_data = json.load(f)
+                except (json.JSONDecodeError, OSError) as e:
+                    logger.error(f"Failed to load chain file {filename}: {e}")
+                    continue
                 chain_name = os.path.splitext(filename)[0]
                 chain_info = {
                     "path": chain_path,
@@ -140,28 +148,27 @@ class StaticChainStore(ChainStore):
         return await self.execute_chain(chain=LLMChain(llm=llm, prompt=PromptTemplate(input_variables=[],template=prompt)), model_name=model_name, metadata=metadata)
 
     async def get_default_available_chat_models(self, exclude: str | None = None):
-        if exclude in self.default_available_chat_models:
-            self.default_available_chat_models.remove(exclude)
-        return self.default_available_chat_models
+        return [m for m in self.default_available_chat_models if m != exclude]
 
-    async def execute_chain(self, chain: LLMChain, model_name: str | None = None, variables: dict = {}, metadata: ChainMetadataForTracking | None = None) -> str:
+    async def execute_chain(self, chain: LLMChain, model_name: str | None = None, variables: dict | None = None, metadata: ChainMetadataForTracking | None = None) -> str:
+        variables = variables or {}
         # chain patching
         if not chain.llm.timeout:
             chain.llm.timeout = settings.timeout_keep_alive
         # set base url if it's not defined
         if not chain.llm.base_url and settings.chain_default_base_url:
             chain.llm.base_url = settings.chain_default_base_url
-        # set base madel if it's not defined
+        # set base model if it's not defined
         if not chain.llm.model and settings.chain_default_model_name:
             chain.llm.model = settings.chain_default_model_name
         # override model if needed
-        if model_name and chain.llm.model:
+        if model_name:
             chain.llm.model = model_name
 
         if not chain.llm.ca_bundle_file and settings.chain_default_ca_bundle_file:
             chain.llm.ca_bundle_file = settings.chain_default_ca_bundle_file
 
-        if not chain.llm.cert_file  and settings.chain_default_cert_file and \
+        if not chain.llm.cert_file and settings.chain_default_cert_file and \
             not chain.llm.key_file and settings.chain_default_key_file:
             chain.llm.cert_file = settings.chain_default_cert_file
             chain.llm.key_file = settings.chain_default_key_file
@@ -169,20 +176,37 @@ class StaticChainStore(ChainStore):
         if not chain.llm.auth_url and settings.chain_default_auth_url:
             chain.llm.auth_url = settings.chain_default_auth_url
             chain.llm.credentials = settings.chain_default_credentials
-            chain.llm.scope = "GIGACHAT_API_CORP"
+            chain.llm.scope = settings.chain_default_scope
 
         metrics_handler = MetricsCallbackHandler(metadata=metadata)
+        callbacks = [metrics_handler]
 
-        fallback_count = 1
-        while fallback_count > 0:
+        if settings.tracing_enabled:
             try:
-                return await chain.ainvoke(variables, config={"callbacks": [metrics_handler]})
+                from app.services.tracing import get_emitter
+                emitter = get_emitter()
+                if emitter:
+                    cb = emitter.get_langchain_callback(
+                        trace_name="chain-execution",
+                        metadata={
+                            "chain_name": metadata.chain_name if metadata else None,
+                            "group_id": metadata.group_id if metadata else None,
+                        },
+                    )
+                    if cb:
+                        callbacks.append(cb)
             except Exception as e:
-                responseError = safe_parse_gigachat_exception(e)
-                # General request failure details
+                logger.error("Failed to initialize tracing callback handler", exc_info=e)
+
+        max_fallbacks = len(self.default_available_chat_models)
+        for attempt in range(max_fallbacks + 1):
+            try:
+                return await chain.ainvoke(variables, config={"callbacks": callbacks})
+            except Exception as e:
+                response_error = safe_parse_gigachat_exception(e)
                 error_response = {
                     "error": {
-                        "message": responseError["message"] or "Chain execution failed",
+                        "message": response_error["message"] or "Chain execution failed",
                         "details": {
                             "exception": str(e),
                             "exception_type": type(e).__name__
@@ -190,22 +214,26 @@ class StaticChainStore(ChainStore):
                     }
                 }
                 logger.warning("Chain execution failed", details=error_response)
-                if responseError["status_code"] == 404 and "No such model" in responseError["message"]:
-                    # let's try other model
+                status_code = response_error.get("status_code")
+                message = response_error.get("message", "")
+                is_model_not_found = (
+                    status_code == 404
+                    and isinstance(message, str)
+                    and "No such model" in message
+                )
+                if is_model_not_found:
                     logger.warning(f"404: No such model. {chain.llm.model}")
                     chat_models = await self.get_default_available_chat_models(exclude=chain.llm.model)
-                    fallback_count = len(chat_models)
-                    if fallback_count == 0:
-                        return JSONResponse(content={"error": "Chain execution failed", "details": error_response}, status_code=responseError["status_code"] or  500)
-                    else:
-                        chain.llm.model = chat_models[0]
-                        logger.warning(f"Fallback: Let's try this one - {chain.llm.model}")
+                    if not chat_models:
+                        return JSONResponse(content={"error": "Chain execution failed", "details": error_response}, status_code=status_code or 500)
+                    chain.llm.model = chat_models[0]
+                    logger.warning(f"Fallback: Let's try this one - {chain.llm.model}")
                 else:
-                    return JSONResponse(content={"error": "Chain execution failed", "details": error_response}, status_code=responseError["status_code"] or  500)
-        return JSONResponse(content={"error": "No llm models available"}, status_code=404)        
+                    return JSONResponse(content={"error": "Chain execution failed", "details": error_response}, status_code=status_code or 500)
+        return JSONResponse(content={"error": "No llm models available"}, status_code=404)
 
 
-    async def get_chains(self, category: str | None = None) -> list[str]:
+    async def get_chains(self, category: str | None = None) -> dict:
         keys_to_keep = {"model", "metadata", "input_variables", "partial_variables"}
         filtered = self.stored_chains
         if category:
@@ -216,4 +244,12 @@ class StaticChainStore(ChainStore):
         }
         return filtered_data
 
-chainStore = StaticChainStore(settings.chain_hub_directory)
+_chainStore = None
+
+
+def get_chain_store() -> StaticChainStore:
+    """Lazy factory — only instantiate when the feature is actually used."""
+    global _chainStore
+    if _chainStore is None:
+        _chainStore = StaticChainStore(settings.chain_hub_directory)
+    return _chainStore
