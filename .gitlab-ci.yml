@@ -29,9 +29,6 @@ stages:
   - build
   - deploy
 
-sast:
-  stage: test
-
 build_image:
   stage: build
   extends: 
