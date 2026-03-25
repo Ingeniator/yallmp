@@ -26,7 +26,7 @@ variables:
   # NEED_VOTES: 2 # опционально для МР кол-во лайков для аппрува и дальнейшего продвижения пайплайна (незабудьте переключить опцию  Automatically resolve merge request diff threads when they become outdated  )
 
 stages:
-  #- test
+  - test
   - build
   - deploy
 
