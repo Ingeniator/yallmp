@@ -98,6 +98,7 @@ def create_app() -> FastAPI:
             "chain_hub": "ok" if settings.chain_hub_enabled else "disabled",
             "prompt_hub": "ok" if settings.prompt_hub_enabled else "disabled",
             "dashboard": "ok" if settings.dashboard_enabled else "disabled",
+            "tracing": "ok" if settings.tracing_enabled else "disabled",
         }
 
         if settings.proxy_enabled:
