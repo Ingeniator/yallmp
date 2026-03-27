@@ -113,6 +113,19 @@ def create_app() -> FastAPI:
                     components["llm_hub"] = "degraded"
                     break
 
+        if settings.tracing_enabled:
+            if not settings.tracing_host:
+                components["tracing"] = "degraded"
+            else:
+                import httpx as _httpx
+                try:
+                    async with _httpx.AsyncClient(timeout=3) as client:
+                        resp = await client.get(f"{settings.tracing_host.rstrip('/')}/livez")
+                        resp.raise_for_status()
+                    components["tracing"] = "ok"
+                except Exception:
+                    components["tracing"] = "degraded"
+
         enabled = {k: v for k, v in components.items() if v != "disabled"}
         if all(v == "ok" for v in enabled.values()):
             return Response(status_code=200)
@@ -157,6 +170,24 @@ def create_app() -> FastAPI:
                 else:
                     components["llm_hub"] = "degraded"
                 details["llm_hub_providers"] = provider_statuses
+
+        # Check tracing backend reachability
+        if settings.tracing_enabled:
+            if not settings.tracing_host:
+                components["tracing"] = "degraded"
+                details["tracing"] = "tracing_host is not configured"
+            else:
+                import httpx as _httpx
+                try:
+                    async with _httpx.AsyncClient(timeout=3) as client:
+                        resp = await client.get(f"{settings.tracing_host.rstrip('/')}/livez")
+                        resp.raise_for_status()
+                    components["tracing"] = "ok"
+                except Exception as exc:
+                    components["tracing"] = "degraded"
+                    details["tracing"] = str(exc)
+        else:
+            components["tracing"] = "disabled"
 
         enabled = {k: v for k, v in components.items() if v != "disabled"}
         status = "ok" if all(v == "ok" for v in enabled.values()) else "degraded"
