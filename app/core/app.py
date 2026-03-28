@@ -98,7 +98,6 @@ def create_app() -> FastAPI:
             "chain_hub": "ok" if settings.chain_hub_enabled else "disabled",
             "prompt_hub": "ok" if settings.prompt_hub_enabled else "disabled",
             "dashboard": "ok" if settings.dashboard_enabled else "disabled",
-            "tracing": "ok" if settings.tracing_enabled else "disabled",
         }
 
         if settings.proxy_enabled:
@@ -113,19 +112,6 @@ def create_app() -> FastAPI:
                 if cb["circuit_open"]:
                     components["llm_hub"] = "degraded"
                     break
-
-        if settings.tracing_enabled:
-            if not settings.tracing_host:
-                components["tracing"] = "degraded"
-            else:
-                import httpx as _httpx
-                try:
-                    async with _httpx.AsyncClient(timeout=3) as client:
-                        resp = await client.get(f"{settings.tracing_host.rstrip('/')}/livez")
-                        resp.raise_for_status()
-                    components["tracing"] = "ok"
-                except Exception:
-                    components["tracing"] = "degraded"
 
         enabled = {k: v for k, v in components.items() if v != "disabled"}
         if all(v == "ok" for v in enabled.values()):
@@ -143,6 +129,7 @@ def create_app() -> FastAPI:
             "chain_hub": "ok" if settings.chain_hub_enabled else "disabled",
             "prompt_hub": "ok" if settings.prompt_hub_enabled else "disabled",
             "dashboard": "ok" if settings.dashboard_enabled else "disabled",
+            "tracing": "ok" if settings.tracing_enabled else "disabled",
         }
 
         details: dict = {}
