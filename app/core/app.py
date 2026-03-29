@@ -40,6 +40,14 @@ async def lifespan(app: FastAPI):
         from app.services.pricing import PricingCache
         pricing_cache = PricingCache(llm_hub.providers)
         await pricing_cache.startup()
+    elif settings.proxy_pricing_endpoint:
+        from app.services.pricing import PricingCache
+        pricing_cache = PricingCache.from_endpoint(
+            url=settings.proxy_pricing_endpoint,
+            prefix=settings.proxy_pricing_prefix,
+            currency=settings.proxy_pricing_currency,
+        )
+        await pricing_cache.startup()
     elif settings.proxy_pricing_config:
         from app.services.pricing import PricingCache
         pricing_cache = PricingCache.from_json(settings.proxy_pricing_config)
@@ -115,8 +123,8 @@ def create_app() -> FastAPI:
 
         enabled = {k: v for k, v in components.items() if v != "disabled"}
         if all(v == "ok" for v in enabled.values()):
-            return Response(status_code=200)
-        return Response(status_code=503)
+            return JSONResponse(status_code=200, content={"status": "ok", "components": components})
+        return JSONResponse(status_code=503, content={"status": "degraded", "components": components})
 
     @app.get("/health")
     async def health_check() -> HealthCheck:

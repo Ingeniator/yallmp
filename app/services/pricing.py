@@ -59,6 +59,26 @@ class PricingCache:
 
         return instance
 
+    @classmethod
+    def from_endpoint(
+        cls,
+        url: str,
+        prefix: str = "proxy",
+        currency: str = "USD",
+        ttl: int = _DEFAULT_TTL,
+    ) -> "PricingCache":
+        """Create a PricingCache that fetches pricing from a remote endpoint.
+
+        The endpoint is polled on startup and refreshed every *ttl* seconds.
+        Expected response: OpenRouter-style ``{model_id: {pricing: {input, output}}}``
+        or flat ``{model_id: {input_cost_per_token, output_cost_per_token}}``.
+        """
+        instance = cls(providers=[], ttl=ttl)
+        instance._endpoint_url = url
+        instance._endpoint_prefix = prefix
+        instance._endpoint_currency = currency
+        return instance
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -117,30 +137,28 @@ class PricingCache:
             await self._refresh()
 
     async def _refresh(self):
+        # Standalone endpoint mode (from_endpoint factory)
+        endpoint_url = getattr(self, "_endpoint_url", None)
+        if endpoint_url:
+            await self._fetch_endpoint(
+                endpoint_url,
+                self._endpoint_prefix,
+                self._endpoint_currency,
+            )
+
+        # Provider-based mode (LLM Hub)
         for provider in self._providers:
             config = provider.config
             prefix = config.prefix
 
             # Try dynamic endpoint first
             if config.pricing_endpoint:
-                try:
-                    url = f"{config.base_url}{config.pricing_endpoint}"
-                    async with httpx.AsyncClient(verify=config.verify_ssl, timeout=30) as client:
-                        resp = await client.get(url)
-                    if resp.status_code == 200:
-                        parsed = self._parse_pricing_response(resp.json())
-                        if parsed:
-                            self._cache[prefix] = parsed
-                            self._currencies[prefix] = config.currency or "USD"
-                            logger.info(
-                                f"Loaded dynamic pricing for '{prefix}': {len(parsed)} models"
-                            )
-                            continue
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to fetch pricing from {config.pricing_endpoint} "
-                        f"for '{prefix}': {e}"
-                    )
+                url = f"{config.base_url}{config.pricing_endpoint}"
+                ok = await self._fetch_endpoint(
+                    url, prefix, config.currency or "USD", verify_ssl=config.verify_ssl,
+                )
+                if ok:
+                    continue
 
             # Fall back to static config
             if config.pricing:
@@ -152,16 +170,55 @@ class PricingCache:
 
         self._last_refresh = time.time()
 
+    async def _fetch_endpoint(
+        self,
+        url: str,
+        prefix: str,
+        currency: str,
+        verify_ssl: bool = True,
+    ) -> bool:
+        """Fetch pricing from a remote URL. Returns True on success."""
+        try:
+            async with httpx.AsyncClient(verify=verify_ssl, timeout=30) as client:
+                resp = await client.get(url)
+            if resp.status_code == 200:
+                parsed = self._parse_pricing_response(resp.json())
+                if parsed:
+                    self._cache[prefix] = parsed
+                    self._currencies[prefix] = currency
+                    logger.info(
+                        f"Loaded dynamic pricing for '{prefix}' from {url}: {len(parsed)} models"
+                    )
+                    return True
+        except Exception as e:
+            logger.warning(f"Failed to fetch pricing from {url} for '{prefix}': {e}")
+        return False
+
     @staticmethod
     def _parse_pricing_response(data: dict) -> dict[str, PricingInfo] | None:
-        """Parse an OpenRouter-style /v1/models_info response into PricingInfo map."""
+        """Parse a pricing response into a PricingInfo map.
+
+        Supports two formats:
+        1. OpenRouter-style: ``{model_id: {"pricing": {"input": x, "output": y}}}``
+        2. Flat: ``{model_id: {"input_cost_per_token": x, "output_cost_per_token": y}}``
+        """
         result: dict[str, PricingInfo] = {}
         models = data if isinstance(data, dict) else {}
         for model_id, info in models.items():
             try:
-                pricing = info.get("pricing", {})
-                input_cost = float(pricing.get("input", 0))
-                output_cost = float(pricing.get("output", 0))
+                if not isinstance(info, dict):
+                    continue
+                # OpenRouter-style nested pricing
+                if "pricing" in info:
+                    pricing = info["pricing"]
+                    input_cost = float(pricing.get("input", 0))
+                    output_cost = float(pricing.get("output", 0))
+                # Flat format
+                elif "input_cost_per_token" in info:
+                    input_cost = float(info["input_cost_per_token"])
+                    output_cost = float(info.get("output_cost_per_token", 0))
+                else:
+                    continue
                 result[model_id] = PricingInfo(
                     input_cost_per_token=input_cost,
                     output_cost_per_token=output_cost,

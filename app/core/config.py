@@ -64,6 +64,9 @@ class AppSettings(BaseSettings):
     proxy_oidc_credentials: str | None = None
 
     proxy_pricing_config: str | None = None  # Path to pricing JSON for legacy proxy mode
+    proxy_pricing_endpoint: str | None = None  # URL to fetch pricing dynamically (e.g. https://openrouter.ai/api/v1/models_info)
+    proxy_pricing_prefix: str = "proxy"  # Provider prefix used when fetching from endpoint
+    proxy_pricing_currency: str = "USD"  # Currency when fetching from endpoint
 
     proxy_max_retries: int = 5  # Number of retries before circuit breaker
     proxy_base_delay: float = 0.5  # Base delay in seconds
