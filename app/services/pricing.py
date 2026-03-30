@@ -104,9 +104,16 @@ class PricingCache:
     ) -> float | None:
         models = self._cache.get(provider_prefix)
         if not models:
+            logger.debug("get_cost: no cache for provider", provider=provider_prefix)
             return None
         pricing = models.get(model_name)
         if not pricing:
+            logger.debug(
+                "get_cost: model not found in pricing",
+                model=model_name,
+                provider=provider_prefix,
+                available=list(models.keys()),
+            )
             return None
         return (
             prompt_tokens * pricing.input_cost_per_token
