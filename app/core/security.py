@@ -27,6 +27,20 @@ def _redact_value(value: str) -> str:
     return value[:_REDACT_PREFIX_LEN] + "...[REDACTED]"
 
 
+_UNSAFE_PATH_RE = re.compile(r"[^a-zA-Z0-9_\-./]")
+
+
+def sanitize_group_id(raw: str | None, default: str = "unknown") -> str:
+    """Sanitize group_id: allow / for nesting, block traversal."""
+    if not raw:
+        return default
+    clean = raw.strip()
+    clean = clean.replace("..", "")
+    clean = _UNSAFE_PATH_RE.sub("_", clean)
+    clean = re.sub(r"/+", "/", clean).strip("/._-")
+    return clean or default
+
+
 def redact_headers(headers: dict) -> dict:
     """Return a copy of *headers* with sensitive values partially masked.
 
