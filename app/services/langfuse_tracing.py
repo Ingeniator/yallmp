@@ -83,9 +83,10 @@ class LangfuseEmitter:
             cost_details = {"total": cost}
             metadata["cost"] = cost
 
-        with client.start_as_current_observation(name="llm-proxy", as_type="span", metadata=metadata):
+        trace_name = model or "llm-proxy"
+        with client.start_as_current_observation(name=trace_name, as_type="span", metadata=metadata):
             with client.start_as_current_observation(
-                name="llm-proxy",
+                name=trace_name,
                 as_type="generation",
                 model=model,
                 input=input_body,
