@@ -28,7 +28,10 @@ class LangfuseEmitter:
             secret_key=self._secret_key,
         )
         self._clients: dict[str, object] = {}
-        logger.info("Langfuse client initialized (OTEL mode)", host=self._host)
+
+        from importlib.metadata import version as pkg_version
+        langfuse_ver = pkg_version("langfuse")
+        logger.info("Langfuse client initialized (OTEL mode)", host=self._host, langfuse_version=langfuse_ver)
 
     def _get_client(self, group_id: str):
         if not group_id or group_id == "unknown":
@@ -80,16 +83,16 @@ class LangfuseEmitter:
             cost_details = {"total": cost}
             metadata["cost"] = cost
 
-        with client.start_as_current_span(name="llm-proxy", metadata=metadata):
-            with client.start_as_current_generation(
-                name="llm-proxy",
-                model=model,
-                input=input_body,
-                output=output_body,
-                usage_details=usage_details or None,
-                cost_details=cost_details,
-            ):
-                pass
+        span = client.start_span(name="llm-proxy", metadata=metadata)
+        span.start_generation(
+            name="llm-proxy",
+            model=model,
+            input=input_body,
+            output=output_body,
+            usage_details=usage_details or None,
+            cost_details=cost_details,
+        )
+        span.end()
 
     def get_langchain_callback(self, trace_name: str, metadata: dict) -> object | None:
         try:
