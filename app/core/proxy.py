@@ -419,6 +419,7 @@ def _emit_completions_metrics(
         group_id=request.headers.get("x-group-id", "unknown"),
         is_streaming=False,
         cost=cost,
+        session_id=request.headers.get("x-session-id"),
     )
 
 
@@ -684,6 +685,7 @@ def _emit_streaming_metrics(
                 group_id=request.headers.get("x-group-id", "unknown"),
                 is_streaming=True,
                 cost=cost,
+                session_id=request.headers.get("x-session-id"),
             )
     except Exception as e:
         logger.error("Error processing streaming LLM usage metrics", exc_info=e)

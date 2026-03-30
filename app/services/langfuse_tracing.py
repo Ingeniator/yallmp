@@ -58,6 +58,7 @@ class LangfuseEmitter:
         group_id: str,
         is_streaming: bool,
         cost: float | None = None,
+        session_id: str | None = None,
     ) -> None:
         client = self._get_client(group_id)
 
@@ -77,6 +78,8 @@ class LangfuseEmitter:
             "status_code": status_code,
             "duration_ms": duration_ms,
         }
+        if session_id:
+            metadata["session_id"] = session_id
 
         cost_details = None
         if cost is not None:
@@ -85,6 +88,8 @@ class LangfuseEmitter:
 
         trace_name = model or "llm-proxy"
         with client.start_as_current_observation(name=trace_name, as_type="span", metadata=metadata):
+            if session_id:
+                client.update_current_trace(session_id=session_id)
             with client.start_as_current_observation(
                 name=trace_name,
                 as_type="generation",
