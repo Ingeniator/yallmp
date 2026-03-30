@@ -66,12 +66,8 @@ class LangfuseEmitter:
             if "total_tokens" in usage:
                 usage_details["total"] = usage["total_tokens"]
 
-        gen = client.start_generation(
+        trace = client.trace(
             name="llm-proxy",
-            model=model,
-            input=input_body,
-            output=output_body,
-            usage_details=usage_details or None,
             metadata={
                 "provider": provider,
                 "group_id": group_id,
@@ -80,7 +76,13 @@ class LangfuseEmitter:
                 "duration_ms": duration_ms,
             },
         )
-        gen.end()
+        trace.generation(
+            name="llm-proxy",
+            model=model,
+            input=input_body,
+            output=output_body,
+            usage=usage_details or None,
+        )
 
     def get_langchain_callback(self, trace_name: str, metadata: dict) -> object | None:
         try:

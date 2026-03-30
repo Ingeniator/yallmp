@@ -17,7 +17,7 @@ dependencies = [
     "structlog>=25.2.0",
     "uvicorn>=0.34.0",
     "aiofiles",
-    "langfuse>=2.0.0",
+    "langfuse>=3.0.0",
 ]
 
 [dependency-groups]
