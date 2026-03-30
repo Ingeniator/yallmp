@@ -42,11 +42,13 @@ class MetricsCallbackHandler(BaseCallbackHandler):
         provider_prefix: str | None = None,
         currency: str | None = None,
         pricing_cache=None,
+        request_model: str | None = None,
     ):
         self.metadata = metadata
         self.provider_prefix = provider_prefix
         self.currency = currency
         self.pricing_cache = pricing_cache
+        self.request_model = request_model
 
     def on_llm_end(self, response, **kwargs):
         group_id = self.metadata.group_id if self.metadata else "unknown"
@@ -86,10 +88,11 @@ class MetricsCallbackHandler(BaseCallbackHandler):
             group_id=group_id,
         ).inc()
 
-        # Cost tracking
+        # Cost tracking — use request model name for pricing lookup (matches pricing cache)
+        pricing_model = self.request_model or model_name
         if self.provider_prefix and self.pricing_cache and self.currency:
             cost = self.pricing_cache.get_cost(
-                self.provider_prefix, model_name, prompt_token_usage, completion_token_usage,
+                self.provider_prefix, pricing_model, prompt_token_usage, completion_token_usage,
             )
             if cost is not None:
                 llm_cost.labels(
