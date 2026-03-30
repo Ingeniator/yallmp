@@ -369,7 +369,7 @@ def _emit_completions_metrics(
 
     # Resolve pricing if not already known
     pfx, cur = provider_prefix, currency
-    if not pfx and pricing_cache:
+    if pfx is None and pricing_cache:
         model_name = response_data.get("model", "")
         usage = response_data.get("usage", {})
         found = pricing_cache.find_cost(
@@ -399,7 +399,7 @@ def _emit_completions_metrics(
 
     duration_ms = (time.time() - start_time) * 1000
     cost = None
-    if pfx and pricing_cache:
+    if pfx is not None and pricing_cache:
         request_model = input_body.get("model", "") if input_body else ""
         usage = response_data.get("usage", {})
         cost = pricing_cache.get_cost(
@@ -645,7 +645,7 @@ def _emit_streaming_metrics(
                     group_id=request.headers.get("x-group-id", "unknown"),
                 )
                 # Resolve pricing from any provider if not set
-                if not pfx and pricing_cache:
+                if pfx is None and pricing_cache:
                     usage = last_payload.get("usage", {})
                     found = pricing_cache.find_cost(
                         request_model or last_payload.get("model", ""),
@@ -665,7 +665,7 @@ def _emit_streaming_metrics(
 
             duration_ms = (time.time() - start_time) * 1000 if start_time else 0
             cost = None
-            if pfx and pricing_cache:
+            if pfx is not None and pricing_cache:
                 s_usage = last_payload.get("usage", {})
                 cost = pricing_cache.get_cost(
                     pfx,
