@@ -89,6 +89,6 @@ class LoggingMiddleware(BaseHTTPMiddleware):
 
             logger.debug("Outgoing Response", **response_log)
         else:
-            logger.info("Request completed", status_code=response.status_code, process_time=f"{process_time:.4f}s")
+            logger.info("Request completed", status_code=response.status_code, process_time=f"{process_time:.4f}s", **log_data)
 
         return response
