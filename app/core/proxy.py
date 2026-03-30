@@ -397,10 +397,11 @@ def _emit_completions_metrics(
         input_body = None
     cost = None
     if pfx and pricing_cache:
+        request_model = input_body.get("model", "") if input_body else ""
         usage = response_data.get("usage", {})
         cost = pricing_cache.get_cost(
             pfx,
-            response_data.get("model", ""),
+            request_model or response_data.get("model", ""),
             usage.get("prompt_tokens", 0),
             usage.get("completion_tokens", 0),
         )
@@ -658,10 +659,11 @@ def _emit_streaming_metrics(
                 input_body = None
             cost = None
             if pfx and pricing_cache:
+                request_model = input_body.get("model", "") if input_body else ""
                 s_usage = last_payload.get("usage", {})
                 cost = pricing_cache.get_cost(
                     pfx,
-                    last_payload.get("model", ""),
+                    request_model or last_payload.get("model", ""),
                     s_usage.get("prompt_tokens", 0),
                     s_usage.get("completion_tokens", 0),
                 )
