@@ -74,28 +74,26 @@ class LangfuseEmitter:
             "status_code": status_code,
             "duration_ms": duration_ms,
         }
+
+        cost_details = None
         if cost is not None:
+            cost_details = {"total": cost}
             metadata["cost"] = cost
 
-        trace = client.trace(
-            name="llm-proxy",
-            metadata=metadata,
-        )
-
-        gen_kwargs = {
-            "name": "llm-proxy",
-            "model": model,
-            "input": input_body,
-            "output": output_body,
-            "usage": usage_details or None,
-        }
-        if cost is not None:
-            gen_kwargs["cost"] = cost
-        trace.generation(**gen_kwargs)
+        with client.start_as_current_span(name="llm-proxy", metadata=metadata):
+            with client.start_as_current_generation(
+                name="llm-proxy",
+                model=model,
+                input=input_body,
+                output=output_body,
+                usage_details=usage_details or None,
+                cost_details=cost_details,
+            ):
+                pass
 
     def get_langchain_callback(self, trace_name: str, metadata: dict) -> object | None:
         try:
-            from langfuse.callback import CallbackHandler
+            from langfuse.langchain import CallbackHandler
 
             group_id = metadata.get("group_id", "")
             client = self._get_client(group_id)
