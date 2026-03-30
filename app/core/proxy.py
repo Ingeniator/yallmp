@@ -367,24 +367,23 @@ def _emit_completions_metrics(
         group_id=request.headers.get("x-group-id", "unknown"),
     )
 
-    # Resolve pricing if not already known
-    pfx, cur = provider_prefix, currency
-    if pfx is None and pricing_cache:
-        model_name = response_data.get("model", "")
-        usage = response_data.get("usage", {})
-        found = pricing_cache.find_cost(
-            model_name,
-            usage.get("prompt_tokens", 0),
-            usage.get("completion_tokens", 0),
-        )
-        if found:
-            pfx, cur, _ = found
-
     try:
         input_body = json.loads(body) if body else None
     except (json.JSONDecodeError, AttributeError):
         input_body = None
     request_model = input_body.get("model", "") if input_body else ""
+
+    # Resolve pricing if not already known
+    pfx, cur = provider_prefix, currency
+    if pfx is None and pricing_cache:
+        usage = response_data.get("usage", {})
+        found = pricing_cache.find_cost(
+            request_model or response_data.get("model", ""),
+            usage.get("prompt_tokens", 0),
+            usage.get("completion_tokens", 0),
+        )
+        if found:
+            pfx, cur, _ = found
 
     try:
         MetricsCallbackHandler(
