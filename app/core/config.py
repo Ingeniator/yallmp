@@ -46,6 +46,7 @@ class AppSettings(BaseSettings):
     # Logging
     log_level: str = "INFO"
     log_file: str | None = None
+    silence_probes: bool = True
 
 
     # Proxy

@@ -4,6 +4,14 @@ import structlog
 
 _configured = False
 
+SILENCED_PATHS = {"/livez", "/ready", "/health", "/metrics"}
+
+
+class SilenceProbesFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        return not any(path in msg for path in SILENCED_PATHS)
+
 
 def setup_logging():
     """Configures logging for the entire application.
@@ -37,5 +45,8 @@ def setup_logging():
 
         logging.getLogger("urllib3").setLevel(logging.WARNING)
         logging.getLogger("sqlalchemy").setLevel(logging.WARNING)
+
+        if settings.silence_probes:
+            logging.getLogger("uvicorn.access").addFilter(SilenceProbesFilter())
 
     return structlog.get_logger()
