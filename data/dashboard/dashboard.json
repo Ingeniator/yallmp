@@ -1,6 +1,6 @@
 {
   "endpoint_patterns": [
-    "/ai/llm/.*",
+    ".*/ai/llm/.*",
     ".*/execute/.*"
   ],
   "table_columns": {
