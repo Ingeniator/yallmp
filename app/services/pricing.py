@@ -195,14 +195,37 @@ class PricingCache:
         return False
 
     @staticmethod
-    def _parse_pricing_response(data: dict) -> dict[str, PricingInfo] | None:
+    def _parse_pricing_response(data) -> dict[str, PricingInfo] | None:
         """Parse a pricing response into a PricingInfo map.
 
-        Supports two formats:
+        Supports three formats:
         1. OpenRouter-style: ``{model_id: {"pricing": {"input": x, "output": y}}}``
-        2. Flat: ``{model_id: {"input_cost_per_token": x, "output_cost_per_token": y}}``
+        2. Flat dict: ``{model_id: {"input_cost_per_token": x, "output_cost_per_token": y}}``
+        3. List (vsellm-style): ``[{"Public Name": "gpt-4o", "Input Cost $": 4.5, "Output Cost $": 13.5}]``
+           Costs are per 1M tokens — divided by 1_000_000 to get per-token.
         """
         result: dict[str, PricingInfo] = {}
+
+        # Format 3: list of model objects
+        if isinstance(data, list):
+            for item in data:
+                try:
+                    if not isinstance(item, dict):
+                        continue
+                    name = item.get("Public Name") or item.get("public_name") or item.get("name")
+                    if not name:
+                        continue
+                    input_cost = float(item.get("Input Cost $", 0) or item.get("input_cost", 0))
+                    output_cost = float(item.get("Output Cost $", 0) or item.get("output_cost", 0))
+                    result[name] = PricingInfo(
+                        input_cost_per_token=input_cost / 1_000_000,
+                        output_cost_per_token=output_cost / 1_000_000,
+                    )
+                except (TypeError, ValueError, AttributeError):
+                    continue
+            return result or None
+
+        # Format 1 & 2: dict keyed by model_id
         models = data if isinstance(data, dict) else {}
         for model_id, info in models.items():
             try:
