@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.core.config import settings
 from app.core.logging_config import setup_logging
 
 logger = setup_logging()
@@ -18,9 +19,16 @@ class LangfuseEmitter:
     def __init__(self):
         from langfuse import Langfuse
 
-        self._default_client = Langfuse()
+        self._host = settings.tracing_host
+        self._public_key = settings.tracing_public_key
+        self._secret_key = settings.tracing_secret_key
+        self._default_client = Langfuse(
+            host=self._host,
+            public_key=self._public_key,
+            secret_key=self._secret_key,
+        )
         self._clients: dict[str, object] = {}
-        logger.info("Langfuse client initialized (OTEL mode)")
+        logger.info("Langfuse client initialized (OTEL mode)", host=self._host)
 
     def _get_client(self, group_id: str):
         if not group_id or group_id == "unknown":
@@ -28,7 +36,11 @@ class LangfuseEmitter:
         if group_id not in self._clients:
             from langfuse import Langfuse
 
-            self._clients[group_id] = Langfuse(public_key=group_id, secret_key=group_id)
+            self._clients[group_id] = Langfuse(
+                host=self._host,
+                public_key=group_id,
+                secret_key=group_id,
+            )
         return self._clients[group_id]
 
     def trace_proxy_request(

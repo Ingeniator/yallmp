@@ -61,7 +61,9 @@ def trace_proxy_request(
     """Convenience wrapper — strips IO when configured, then delegates to the emitter."""
     emitter = get_emitter()
     if emitter is None:
+        logger.debug("trace_proxy_request skipped: emitter is None")
         return
+    logger.debug("trace_proxy_request", model=model, provider=provider, group_id=group_id)
     if not settings.tracing_log_io:
         input_body = None
         output_body = None

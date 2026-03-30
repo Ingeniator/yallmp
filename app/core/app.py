@@ -40,6 +40,14 @@ async def lifespan(app: FastAPI):
         from app.services.pricing import PricingCache
         pricing_cache = PricingCache(llm_hub.providers)
         await pricing_cache.startup()
+    elif settings.proxy_pricing_endpoint:
+        from app.services.pricing import PricingCache
+        pricing_cache = PricingCache.from_endpoint(
+            url=settings.proxy_pricing_endpoint,
+            prefix=settings.proxy_pricing_prefix,
+            currency=settings.proxy_pricing_currency,
+        )
+        await pricing_cache.startup()
     elif settings.proxy_pricing_config:
         from app.services.pricing import PricingCache
         pricing_cache = PricingCache.from_json(settings.proxy_pricing_config)
