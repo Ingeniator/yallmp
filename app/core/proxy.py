@@ -381,20 +381,23 @@ def _emit_completions_metrics(
             pfx, cur, _ = found
 
     try:
+        input_body = json.loads(body) if body else None
+    except (json.JSONDecodeError, AttributeError):
+        input_body = None
+    request_model = input_body.get("model", "") if input_body else ""
+
+    try:
         MetricsCallbackHandler(
             metadata,
             provider_prefix=pfx,
             currency=cur,
             pricing_cache=pricing_cache,
+            request_model=request_model,
         ).on_llm_end(response_data)
     except Exception as e:
         logger.error("Error processing LLM usage metrics", exc_info=e)
 
     duration_ms = (time.time() - start_time) * 1000
-    try:
-        input_body = json.loads(body) if body else None
-    except (json.JSONDecodeError, AttributeError):
-        input_body = None
     cost = None
     if pfx and pricing_cache:
         request_model = input_body.get("model", "") if input_body else ""
@@ -627,6 +630,14 @@ def _emit_streaming_metrics(
 
         if last_data:
             last_payload = json.loads(last_data)
+
+            try:
+                input_body = json.loads(body) if body else None
+            except (json.JSONDecodeError, AttributeError):
+                input_body = None
+            request_model = input_body.get("model", "") if input_body else ""
+
+            pfx, cur = provider_prefix, provider_currency
             if "usage" in last_payload:
                 metadata = ChainMetadataForTracking(
                     chain_type=ChainType.prompt,
@@ -634,11 +645,10 @@ def _emit_streaming_metrics(
                     group_id=request.headers.get("x-group-id", "unknown"),
                 )
                 # Resolve pricing from any provider if not set
-                pfx, cur = provider_prefix, provider_currency
                 if not pfx and pricing_cache:
                     usage = last_payload.get("usage", {})
                     found = pricing_cache.find_cost(
-                        last_payload.get("model", ""),
+                        request_model or last_payload.get("model", ""),
                         usage.get("prompt_tokens", 0),
                         usage.get("completion_tokens", 0),
                     )
@@ -650,16 +660,12 @@ def _emit_streaming_metrics(
                     provider_prefix=pfx,
                     currency=cur,
                     pricing_cache=pricing_cache,
+                    request_model=request_model,
                 ).on_llm_end(last_payload)
 
             duration_ms = (time.time() - start_time) * 1000 if start_time else 0
-            try:
-                input_body = json.loads(body) if body else None
-            except (json.JSONDecodeError, AttributeError):
-                input_body = None
             cost = None
             if pfx and pricing_cache:
-                request_model = input_body.get("model", "") if input_body else ""
                 s_usage = last_payload.get("usage", {})
                 cost = pricing_cache.get_cost(
                     pfx,
