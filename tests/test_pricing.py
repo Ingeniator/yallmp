@@ -220,6 +220,95 @@ def test_handler_skips_cost_when_no_pricing(comp_c, prompt_c, total_c, cost_coun
 @patch("app.services.metrics_callback_handler.total_token_usage_counter")
 @patch("app.services.metrics_callback_handler.prompt_token_usage_counter")
 @patch("app.services.metrics_callback_handler.completion_token_usage_counter")
+def test_handler_uses_request_model_for_pricing(comp_c, prompt_c, total_c, cost_counter):
+    """Cost lookup uses the request model name, not the versioned response model."""
+    pricing_cache = MagicMock()
+    pricing_cache.get_cost.return_value = 1.5
+
+    metadata = ChainMetadataForTracking(
+        chain_type=ChainType.prompt, chain_name="proxy", group_id="g1"
+    )
+    handler = MetricsCallbackHandler(
+        metadata=metadata,
+        provider_prefix="prov",
+        currency="USD",
+        pricing_cache=pricing_cache,
+        request_model="gpt-4o",
+    )
+
+    response = {
+        "usage": {"total_tokens": 200, "prompt_tokens": 120, "completion_tokens": 80},
+        "model": "gpt-4o-2024-08-06",  # versioned name from response
+    }
+    handler.on_llm_end(response)
+
+    # Should use request_model "gpt-4o", not response "gpt-4o-2024-08-06"
+    pricing_cache.get_cost.assert_called_once_with("prov", "gpt-4o", 120, 80)
+
+
+@patch("app.services.metrics_callback_handler.llm_cost")
+@patch("app.services.metrics_callback_handler.total_token_usage_counter")
+@patch("app.services.metrics_callback_handler.prompt_token_usage_counter")
+@patch("app.services.metrics_callback_handler.completion_token_usage_counter")
+def test_handler_falls_back_to_response_model_when_no_request_model(comp_c, prompt_c, total_c, cost_counter):
+    """When request_model is not set, falls back to response model name."""
+    pricing_cache = MagicMock()
+    pricing_cache.get_cost.return_value = 0.5
+
+    metadata = ChainMetadataForTracking(
+        chain_type=ChainType.prompt, chain_name="proxy", group_id="g1"
+    )
+    handler = MetricsCallbackHandler(
+        metadata=metadata,
+        provider_prefix="prov",
+        currency="USD",
+        pricing_cache=pricing_cache,
+    )
+
+    response = {
+        "usage": {"total_tokens": 100, "prompt_tokens": 60, "completion_tokens": 40},
+        "model": "gpt-4o-2024-08-06",
+    }
+    handler.on_llm_end(response)
+
+    # No request_model — should use response model
+    pricing_cache.get_cost.assert_called_once_with("prov", "gpt-4o-2024-08-06", 60, 40)
+
+
+@patch("app.services.metrics_callback_handler.llm_cost")
+@patch("app.services.metrics_callback_handler.total_token_usage_counter")
+@patch("app.services.metrics_callback_handler.prompt_token_usage_counter")
+@patch("app.services.metrics_callback_handler.completion_token_usage_counter")
+def test_handler_cost_works_with_empty_provider_prefix(comp_c, prompt_c, total_c, cost_counter):
+    """Empty string provider prefix should still trigger cost calculation."""
+    pricing_cache = MagicMock()
+    pricing_cache.get_cost.return_value = 0.99
+
+    metadata = ChainMetadataForTracking(
+        chain_type=ChainType.prompt, chain_name="proxy", group_id="g1"
+    )
+    handler = MetricsCallbackHandler(
+        metadata=metadata,
+        provider_prefix="",
+        currency="USD",
+        pricing_cache=pricing_cache,
+        request_model="gpt-5",
+    )
+
+    response = {
+        "usage": {"total_tokens": 50, "prompt_tokens": 30, "completion_tokens": 20},
+        "model": "gpt-5-2025-04-14",
+    }
+    handler.on_llm_end(response)
+
+    pricing_cache.get_cost.assert_called_once_with("", "gpt-5", 30, 20)
+    cost_counter.labels.return_value.inc.assert_called_with(0.99)
+
+
+@patch("app.services.metrics_callback_handler.llm_cost")
+@patch("app.services.metrics_callback_handler.total_token_usage_counter")
+@patch("app.services.metrics_callback_handler.prompt_token_usage_counter")
+@patch("app.services.metrics_callback_handler.completion_token_usage_counter")
 def test_handler_skips_cost_when_get_cost_returns_none(comp_c, prompt_c, total_c, cost_counter):
     pricing_cache = MagicMock()
     pricing_cache.get_cost.return_value = None
