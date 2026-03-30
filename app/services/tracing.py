@@ -23,6 +23,7 @@ class TraceEmitter(Protocol):
         duration_ms: float,
         group_id: str,
         is_streaming: bool,
+        cost: float | None = None,
     ) -> None: ...
 
     def get_langchain_callback(self, trace_name: str, metadata: dict) -> object | None: ...
@@ -57,13 +58,14 @@ def trace_proxy_request(
     duration_ms: float,
     group_id: str,
     is_streaming: bool,
+    cost: float | None = None,
 ) -> None:
     """Convenience wrapper — strips IO when configured, then delegates to the emitter."""
     emitter = get_emitter()
     if emitter is None:
         logger.debug("trace_proxy_request skipped: emitter is None")
         return
-    logger.debug("trace_proxy_request", model=model, provider=provider, group_id=group_id)
+    logger.debug("trace_proxy_request", model=model, provider=provider, group_id=group_id, cost=cost)
     if not settings.tracing_log_io:
         input_body = None
         output_body = None
@@ -78,6 +80,7 @@ def trace_proxy_request(
             duration_ms=duration_ms,
             group_id=group_id,
             is_streaming=is_streaming,
+            cost=cost,
         )
     except Exception as e:
         logger.error("Error in trace_proxy_request", exc_info=e)

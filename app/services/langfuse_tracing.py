@@ -54,6 +54,7 @@ class LangfuseEmitter:
         duration_ms: float,
         group_id: str,
         is_streaming: bool,
+        cost: float | None = None,
     ) -> None:
         client = self._get_client(group_id)
 
@@ -66,23 +67,31 @@ class LangfuseEmitter:
             if "total_tokens" in usage:
                 usage_details["total"] = usage["total_tokens"]
 
+        metadata = {
+            "provider": provider,
+            "group_id": group_id,
+            "is_streaming": is_streaming,
+            "status_code": status_code,
+            "duration_ms": duration_ms,
+        }
+        if cost is not None:
+            metadata["cost"] = cost
+
         trace = client.trace(
             name="llm-proxy",
-            metadata={
-                "provider": provider,
-                "group_id": group_id,
-                "is_streaming": is_streaming,
-                "status_code": status_code,
-                "duration_ms": duration_ms,
-            },
+            metadata=metadata,
         )
-        trace.generation(
-            name="llm-proxy",
-            model=model,
-            input=input_body,
-            output=output_body,
-            usage=usage_details or None,
-        )
+
+        gen_kwargs = {
+            "name": "llm-proxy",
+            "model": model,
+            "input": input_body,
+            "output": output_body,
+            "usage": usage_details or None,
+        }
+        if cost is not None:
+            gen_kwargs["cost"] = cost
+        trace.generation(**gen_kwargs)
 
     def get_langchain_callback(self, trace_name: str, metadata: dict) -> object | None:
         try:

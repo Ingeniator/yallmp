@@ -395,6 +395,16 @@ def _emit_completions_metrics(
         input_body = json.loads(body) if body else None
     except (json.JSONDecodeError, AttributeError):
         input_body = None
+    cost = None
+    if pfx and pricing_cache:
+        usage = response_data.get("usage", {})
+        cost = pricing_cache.get_cost(
+            pfx,
+            response_data.get("model", ""),
+            usage.get("prompt_tokens", 0),
+            usage.get("completion_tokens", 0),
+        )
+
     trace_proxy_request(
         model=response_data.get("model", ""),
         provider=pfx,
@@ -405,6 +415,7 @@ def _emit_completions_metrics(
         duration_ms=duration_ms,
         group_id=request.headers.get("x-group-id", "unknown"),
         is_streaming=False,
+        cost=cost,
     )
 
 
@@ -645,9 +656,19 @@ def _emit_streaming_metrics(
                 input_body = json.loads(body) if body else None
             except (json.JSONDecodeError, AttributeError):
                 input_body = None
+            cost = None
+            if pfx and pricing_cache:
+                s_usage = last_payload.get("usage", {})
+                cost = pricing_cache.get_cost(
+                    pfx,
+                    last_payload.get("model", ""),
+                    s_usage.get("prompt_tokens", 0),
+                    s_usage.get("completion_tokens", 0),
+                )
+
             trace_proxy_request(
                 model=last_payload.get("model", ""),
-                provider=provider_prefix,
+                provider=pfx,
                 input_body=input_body,
                 output_body=last_payload,
                 status_code=200,
@@ -655,6 +676,7 @@ def _emit_streaming_metrics(
                 duration_ms=duration_ms,
                 group_id=request.headers.get("x-group-id", "unknown"),
                 is_streaming=True,
+                cost=cost,
             )
     except Exception as e:
         logger.error("Error processing streaming LLM usage metrics", exc_info=e)
