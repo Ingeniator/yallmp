@@ -83,16 +83,17 @@ class LangfuseEmitter:
             cost_details = {"total": cost}
             metadata["cost"] = cost
 
-        span = client.start_span(name="llm-proxy", metadata=metadata)
-        span.start_generation(
-            name="llm-proxy",
-            model=model,
-            input=input_body,
-            output=output_body,
-            usage_details=usage_details or None,
-            cost_details=cost_details,
-        )
-        span.end()
+        with client.start_as_current_observation(name="llm-proxy", as_type="span", metadata=metadata):
+            with client.start_as_current_observation(
+                name="llm-proxy",
+                as_type="generation",
+                model=model,
+                input=input_body,
+                output=output_body,
+                usage_details=usage_details or None,
+                cost_details=cost_details,
+            ):
+                pass
 
     def get_langchain_callback(self, trace_name: str, metadata: dict) -> object | None:
         try:
