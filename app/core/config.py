@@ -31,6 +31,8 @@ class AppSettings(BaseSettings):
     dashboard_metrics_backend: str = "local"       # "local" or "prometheus"
     dashboard_prometheus_url: str = ""             # e.g. "http://prometheus:9090"
     dashboard_prometheus_timeout: int = 10
+    dashboard_prometheus_user: str = ""
+    dashboard_prometheus_password: str = ""
 
     # LLM Hub
     llm_hub_directory: str = "data/llm_hub"
