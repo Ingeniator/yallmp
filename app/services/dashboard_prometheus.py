@@ -81,7 +81,7 @@ def _extract_metric_entries(results, extra_fields=None):
     return entries
 
 
-async def fetch_metrics_from_prometheus(url, timeout, group_id, is_org_admin, endpoint_patterns):
+async def fetch_metrics_from_prometheus(url, timeout, group_id, is_org_admin, endpoint_patterns, auth=None):
     """Query Prometheus HTTP API for all dashboard metrics.
 
     Returns a dict matching the shape of parse_metrics_to_dict:
@@ -102,7 +102,7 @@ async def fetch_metrics_from_prometheus(url, timeout, group_id, is_org_admin, en
         "http_duration_count": f"http_request_duration_seconds_count{http_selector}",
     }
 
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    async with httpx.AsyncClient(timeout=timeout, auth=auth) as client:
         results = await asyncio.gather(
             *[_query_prometheus(client, url, q) for q in queries.values()]
         )
