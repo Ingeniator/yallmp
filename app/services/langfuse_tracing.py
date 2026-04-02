@@ -87,19 +87,18 @@ class LangfuseEmitter:
             metadata["cost"] = cost
 
         trace_name = model or "llm-proxy"
-        with client.start_as_current_observation(name=trace_name, as_type="span", metadata=metadata):
-            if session_id:
-                client.update_current_trace(session_id=session_id)
-            with client.start_as_current_observation(
+        with client.start_as_current_observation(
                 name=trace_name,
                 as_type="generation",
                 model=model,
                 input=input_body,
                 output=output_body,
+                metadata=metadata,
                 usage_details=usage_details or None,
                 cost_details=cost_details,
             ):
-                pass
+            if session_id:
+                client.update_current_trace(session_id=session_id)
 
     def get_langchain_callback(self, trace_name: str, metadata: dict) -> object | None:
         try:
