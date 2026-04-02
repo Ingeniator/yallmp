@@ -154,6 +154,11 @@ async def get_dashboard_json(group_id=None, is_org_admin=False, registry=None):
         prom_auth = None
         if settings.dashboard_prometheus_user:
             prom_auth = (settings.dashboard_prometheus_user, settings.dashboard_prometheus_password)
+        prom_verify = (
+            settings.dashboard_prometheus_ca_bundle
+            if settings.dashboard_prometheus_ca_bundle
+            else settings.dashboard_prometheus_verify_ssl
+        )
         data = await fetch_metrics_from_prometheus(
             url=settings.dashboard_prometheus_url,
             timeout=settings.dashboard_prometheus_timeout,
@@ -161,6 +166,7 @@ async def get_dashboard_json(group_id=None, is_org_admin=False, registry=None):
             is_org_admin=is_org_admin,
             endpoint_patterns=patterns,
             auth=prom_auth,
+            verify=prom_verify,
         )
         # Already filtered by PromQL
         filtered_tokens = data["token_usage"]
