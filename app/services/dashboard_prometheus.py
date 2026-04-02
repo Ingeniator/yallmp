@@ -46,9 +46,9 @@ async def _query_prometheus(client, url, query):
     Returns the result list or empty list on error.
     """
     try:
-        resp = await client.get(
+        resp = await client.post(
             f"{url}/api/v1/query",
-            params={"query": query},
+            data={"query": query},
         )
         if resp.status_code != 200:
             logger.warning("Prometheus query failed (HTTP %s): %s", resp.status_code, query)
