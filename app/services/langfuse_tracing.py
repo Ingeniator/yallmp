@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from collections import OrderedDict
+
 from app.core.config import settings
 from app.core.logging_config import setup_logging
 
 logger = setup_logging()
+
+MAX_CLIENT_CACHE_SIZE = 128
 
 
 class LangfuseEmitter:
@@ -27,7 +31,7 @@ class LangfuseEmitter:
             public_key=self._public_key,
             secret_key=self._secret_key,
         )
-        self._clients: dict[str, object] = {}
+        self._clients: OrderedDict[str, object] = OrderedDict()
 
         from importlib.metadata import version as pkg_version
         langfuse_ver = pkg_version("langfuse")
@@ -36,15 +40,26 @@ class LangfuseEmitter:
     def _get_client(self, group_id: str):
         if not group_id or group_id == "unknown":
             return self._default_client
-        if group_id not in self._clients:
-            from langfuse import Langfuse
+        if group_id in self._clients:
+            self._clients.move_to_end(group_id)
+            return self._clients[group_id]
 
-            self._clients[group_id] = Langfuse(
-                host=self._host,
-                public_key=group_id,
-                secret_key=group_id,
-            )
-        return self._clients[group_id]
+        from langfuse import Langfuse
+
+        client = Langfuse(
+            host=self._host,
+            public_key=group_id,
+            secret_key=group_id,
+        )
+        self._clients[group_id] = client
+
+        # Evict least-recently-used client if cache is full
+        if len(self._clients) > MAX_CLIENT_CACHE_SIZE:
+            _, evicted = self._clients.popitem(last=False)
+            evicted.flush()
+            evicted.shutdown()
+
+        return client
 
     def trace_proxy_request(
         self,
