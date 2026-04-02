@@ -1,4 +1,5 @@
 import json
+import math
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -140,14 +141,45 @@ def _compute_avg_duration(entries):
     return avg
 
 
-async def get_dashboard_json(group_id=None, is_org_admin=False, registry=None):
+VALID_TIME_WINDOWS = {"1h", "1d", "7d", "30d"}
+
+
+def _parse_custom_range(start: str, end: str):
+    """Parse ISO start/end into (duration_seconds, end_unix_timestamp).
+
+    Returns (None, None) if parsing fails.
+    """
+    try:
+        s = datetime.fromisoformat(start)
+        e = datetime.fromisoformat(end)
+        delta = (e - s).total_seconds()
+        if delta <= 0:
+            return None, None
+        return int(math.ceil(delta)), e.timestamp()
+    except (ValueError, TypeError):
+        return None, None
+
+
+async def get_dashboard_json(group_id=None, is_org_admin=False, registry=None, time_window="", start="", end=""):
     """Build complete dashboard payload with raw data and pre-aggregated summary.
 
     Args:
         group_id: Optional group_id from x-group-id header for access scoping.
         is_org_admin: True when x-role header is ORG_ADMIN (shows whole org).
         registry: Prometheus CollectorRegistry (used in local mode, defaults to REGISTRY).
+        time_window: PromQL duration like "1h", "1d", "7d", "30d". Empty for all-time.
+        start: ISO datetime for custom range start (e.g. "2026-03-01T00:00:00").
+        end: ISO datetime for custom range end (e.g. "2026-04-01T00:00:00").
     """
+    eval_time = None
+    if start and end:
+        duration_secs, eval_time = _parse_custom_range(start, end)
+        if duration_secs:
+            time_window = f"{duration_secs}s"
+        else:
+            time_window = ""
+    elif time_window and time_window not in VALID_TIME_WINDOWS:
+        time_window = ""
     patterns = _load_endpoint_patterns()
 
     if settings.dashboard_metrics_backend == "prometheus":
@@ -167,6 +199,8 @@ async def get_dashboard_json(group_id=None, is_org_admin=False, registry=None):
             endpoint_patterns=patterns,
             auth=prom_auth,
             verify=prom_verify,
+            time_window=time_window,
+            eval_time=eval_time,
         )
         # Already filtered by PromQL
         filtered_tokens = data["token_usage"]
@@ -199,5 +233,7 @@ async def get_dashboard_json(group_id=None, is_org_admin=False, registry=None):
         "cost": filtered_cost,
         "summary": summary,
         "table_columns": _load_table_columns(),
+        "time_window": time_window or "all",
+        "time_range": {"start": start, "end": end} if start and end and eval_time else None,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }

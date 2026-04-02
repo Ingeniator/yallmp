@@ -106,7 +106,6 @@ def create_app() -> FastAPI:
             "chain_hub": "ok" if settings.chain_hub_enabled else "disabled",
             "prompt_hub": "ok" if settings.prompt_hub_enabled else "disabled",
             "dashboard": "ok" if settings.dashboard_enabled else "disabled",
-            "tracing": "ok" if settings.tracing_enabled else "disabled",
         }
 
         if settings.proxy_enabled:
@@ -122,15 +121,10 @@ def create_app() -> FastAPI:
                     components["llm_hub"] = "degraded"
                     break
 
-        # Check tracing backend reachability
-        if settings.tracing_enabled:
-            if not settings.tracing_host:
-                components["tracing"] = "degraded"
-
         enabled = {k: v for k, v in components.items() if v != "disabled"}
         if all(v == "ok" for v in enabled.values()):
-            return Response(status_code=200)
-        return Response(status_code=503)
+            return JSONResponse(status_code=200, content={"status": "ok", "components": components})
+        return JSONResponse(status_code=503, content={"status": "degraded", "components": components})
 
     @app.get("/health")
     async def health_check() -> HealthCheck:
@@ -213,10 +207,18 @@ def create_app() -> FastAPI:
             return HTMLResponse(content=_dashboard_html)
 
         @app.get("/dashboard/api/metrics")
-        async def dashboard_api_metrics(request: Request):
+        async def dashboard_api_metrics(
+            request: Request,
+            time_window: str = "",
+            start: str = "",
+            end: str = "",
+        ):
             group_id = request.headers.get("x-group-id")
             is_org_admin = request.headers.get("x-role", "").upper() == "ORG_ADMIN"
-            return await get_dashboard_json(group_id=group_id, is_org_admin=is_org_admin)
+            return await get_dashboard_json(
+                group_id=group_id, is_org_admin=is_org_admin,
+                time_window=time_window, start=start, end=end,
+            )
 
 
     if settings.proxy_enabled:
