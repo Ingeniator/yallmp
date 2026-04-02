@@ -207,10 +207,18 @@ def create_app() -> FastAPI:
             return HTMLResponse(content=_dashboard_html)
 
         @app.get("/dashboard/api/metrics")
-        async def dashboard_api_metrics(request: Request):
+        async def dashboard_api_metrics(
+            request: Request,
+            time_window: str = "",
+            start: str = "",
+            end: str = "",
+        ):
             group_id = request.headers.get("x-group-id")
             is_org_admin = request.headers.get("x-role", "").upper() == "ORG_ADMIN"
-            return await get_dashboard_json(group_id=group_id, is_org_admin=is_org_admin)
+            return await get_dashboard_json(
+                group_id=group_id, is_org_admin=is_org_admin,
+                time_window=time_window, start=start, end=end,
+            )
 
 
     if settings.proxy_enabled:

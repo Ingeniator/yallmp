@@ -40,15 +40,21 @@ def _build_selector(group_filter, endpoint_filter=""):
     return "{" + ",".join(parts) + "}"
 
 
-async def _query_prometheus(client, url, query):
+async def _query_prometheus(client, url, query, eval_time=None):
     """Execute a PromQL instant query against the Prometheus HTTP API.
+
+    Args:
+        eval_time: Optional unix timestamp to evaluate the query at (for custom ranges).
 
     Returns the result list or empty list on error.
     """
     try:
+        params = {"query": query}
+        if eval_time is not None:
+            params["time"] = eval_time
         resp = await client.post(
             f"{url}/api/v1/query",
-            data={"query": query},
+            data=params,
         )
         if resp.status_code != 200:
             logger.warning("Prometheus query failed (HTTP %s): %s", resp.status_code, query)
@@ -81,30 +87,44 @@ def _extract_metric_entries(results, extra_fields=None):
     return entries
 
 
-async def fetch_metrics_from_prometheus(url, timeout, group_id, is_org_admin, endpoint_patterns, auth=None, verify=True):
+async def fetch_metrics_from_prometheus(url, timeout, group_id, is_org_admin, endpoint_patterns, auth=None, verify=True, time_window="", eval_time=None):
     """Query Prometheus HTTP API for all dashboard metrics.
 
     Returns a dict matching the shape of parse_metrics_to_dict:
     {"token_usage": [...], "http_requests": [...], "http_duration": [...], "cost": [...]}
+
+    When time_window is set (e.g. "1d", "7d"), counters are wrapped with
+    increase(metric[window]) to return the delta over that period.
     """
     group_filter = _build_group_filter(group_id, is_org_admin)
     endpoint_filter = _build_endpoint_filter(endpoint_patterns)
     token_selector = _build_selector(group_filter)
     http_selector = _build_selector(group_filter, endpoint_filter)
 
-    queries = {
-        "total_tokens": f"llm_total_token_usage_total{token_selector}",
-        "prompt_tokens": f"llm_prompt_token_usage_total{token_selector}",
-        "completion_tokens": f"llm_completion_token_usage_total{token_selector}",
-        "cost": f"llm_cost_total{token_selector}",
-        "http_requests": f"http_requests_total{http_selector}",
-        "http_duration_sum": f"http_request_duration_seconds_sum{http_selector}",
-        "http_duration_count": f"http_request_duration_seconds_count{http_selector}",
-    }
+    if time_window:
+        queries = {
+            "total_tokens": f"increase(llm_total_token_usage_total{token_selector}[{time_window}])",
+            "prompt_tokens": f"increase(llm_prompt_token_usage_total{token_selector}[{time_window}])",
+            "completion_tokens": f"increase(llm_completion_token_usage_total{token_selector}[{time_window}])",
+            "cost": f"increase(llm_cost_total{token_selector}[{time_window}])",
+            "http_requests": f"increase(http_requests_total{http_selector}[{time_window}])",
+            "http_duration_sum": f"increase(http_request_duration_seconds_sum{http_selector}[{time_window}])",
+            "http_duration_count": f"increase(http_request_duration_seconds_count{http_selector}[{time_window}])",
+        }
+    else:
+        queries = {
+            "total_tokens": f"llm_total_token_usage_total{token_selector}",
+            "prompt_tokens": f"llm_prompt_token_usage_total{token_selector}",
+            "completion_tokens": f"llm_completion_token_usage_total{token_selector}",
+            "cost": f"llm_cost_total{token_selector}",
+            "http_requests": f"http_requests_total{http_selector}",
+            "http_duration_sum": f"http_request_duration_seconds_sum{http_selector}",
+            "http_duration_count": f"http_request_duration_seconds_count{http_selector}",
+        }
 
     async with httpx.AsyncClient(timeout=timeout, auth=auth, verify=verify) as client:
         results = await asyncio.gather(
-            *[_query_prometheus(client, url, q) for q in queries.values()]
+            *[_query_prometheus(client, url, q, eval_time=eval_time) for q in queries.values()]
         )
 
     raw = dict(zip(queries.keys(), results))
