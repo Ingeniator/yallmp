@@ -1,4 +1,4 @@
-from app.core.logging_config import setup_logging
+from app.core.logging_config import setup_logging, SILENCED_PATHS
 from app.core.security import redact_headers
 import logging
 from fastapi import Request
@@ -20,6 +20,10 @@ class LoggingMiddleware(BaseHTTPMiddleware):
         structlog.contextvars.clear_contextvars()
         if request_id:
             structlog.contextvars.bind_contextvars(request_id=request_id)
+
+        # skip logging probe requests
+        if request.url.path in SILENCED_PATHS:
+            return await call_next(request)
 
         # skip logging stream requests
         content_type = request.headers.get("content-type", "").lower()
