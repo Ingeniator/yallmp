@@ -113,7 +113,9 @@ class LangfuseEmitter:
             cost_details=cost_details,
         ):
             if session_id:
-                client.update_current_trace(session_id=session_id)
+                from langfuse import propagate_attributes
+                with propagate_attributes(session_id=session_id):
+                    pass
 
     def get_langchain_callback(self, trace_name: str, metadata: dict) -> object | None:
         try:
