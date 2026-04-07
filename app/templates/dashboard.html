@@ -33,6 +33,21 @@
   <h1>Metrics Dashboard</h1>
   <div class="header-right">
     <span><span class="status-dot ok" id="statusDot"></span>Updated: <span id="lastUpdated">-</span></span>
+    <label>Time window:
+      <select id="timeWindow">
+        <option value="">All time</option>
+        <option value="1h">Last 1 hour</option>
+        <option value="1d" selected>Last 1 day</option>
+        <option value="7d">Last 7 days</option>
+        <option value="30d">Last 30 days</option>
+        <option value="custom">Custom range</option>
+      </select>
+    </label>
+    <span id="customRange" style="display:none">
+      <input type="datetime-local" id="rangeStart" title="Start">
+      <span>–</span>
+      <input type="datetime-local" id="rangeEnd" title="End">
+    </span>
     <label>Refresh:
       <select id="refreshInterval">
         <option value="5000">5s</option>
@@ -84,7 +99,7 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
 (function() {
-  const API_URL = (window.location.pathname.replace(/\/$/, '')) + '/api/metrics';
+  const API_BASE = (window.location.pathname.replace(/\/$/, '')) + '/api/metrics';
   const COLORS = ['#4a90d9','#50c878','#f5a623','#d94a68','#9b59b6','#1abc9c','#e67e22','#3498db','#e74c3c','#2ecc71'];
 
   let charts = {};
@@ -181,9 +196,24 @@
 
   function fmt(v) { return typeof v === 'number' ? v.toLocaleString() : v; }
 
+  function buildApiUrl() {
+    const tw = document.getElementById('timeWindow').value;
+    const params = new URLSearchParams();
+    if (tw === 'custom') {
+      const s = document.getElementById('rangeStart').value;
+      const e = document.getElementById('rangeEnd').value;
+      if (s) params.set('start', s);
+      if (e) params.set('end', e);
+    } else if (tw) {
+      params.set('time_window', tw);
+    }
+    const qs = params.toString();
+    return qs ? `${API_BASE}?${qs}` : API_BASE;
+  }
+
   async function fetchAndRender() {
     try {
-      const resp = await fetch(API_URL);
+      const resp = await fetch(buildApiUrl());
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
 
@@ -219,6 +249,16 @@
     const ms = parseInt(sel.value, 10);
     if (ms > 0) refreshTimer = setInterval(fetchAndRender, ms);
   }
+
+  // Time window controls
+  const twSel = document.getElementById('timeWindow');
+  const customRange = document.getElementById('customRange');
+  twSel.addEventListener('change', function() {
+    customRange.style.display = this.value === 'custom' ? '' : 'none';
+    fetchAndRender();
+  });
+  document.getElementById('rangeStart').addEventListener('change', fetchAndRender);
+  document.getElementById('rangeEnd').addEventListener('change', fetchAndRender);
 
   fetchAndRender();
   setupRefresh();
