@@ -1,6 +1,6 @@
 import pytest
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 from app.services.token_manager import OIDCTokenManager
 

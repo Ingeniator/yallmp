@@ -1,4 +1,3 @@
-import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
 from starlette.testclient import TestClient
 from fastapi.responses import JSONResponse
@@ -118,7 +117,7 @@ def test_lifespan_with_proxy():
         from app.core.app import create_app
         app = create_app()
 
-        with TestClient(app, raise_server_exceptions=False) as client:
+        with TestClient(app, raise_server_exceptions=False):
             assert app.state.client is mock_client
 
     mock_client.aclose.assert_awaited_once()

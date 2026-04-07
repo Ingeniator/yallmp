@@ -1,8 +1,7 @@
 import pytest
 import json
 import os
-import tempfile
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 from app.services.llm_hub import LlmHub, LlmProvider
 from app.schemas.provider import LlmProviderConfig, AuthType, AuthConfig

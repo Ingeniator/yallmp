@@ -1,5 +1,3 @@
-import pytest
-from unittest.mock import AsyncMock
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Route
@@ -53,7 +51,6 @@ def test_chunked_post_skipped():
 def test_debug_logging_branches():
     """When logger is at DEBUG level, request body and response body are logged."""
     from unittest.mock import patch, MagicMock
-    import logging
 
     mock_logger = MagicMock()
     mock_logger.isEnabledFor = MagicMock(return_value=True)

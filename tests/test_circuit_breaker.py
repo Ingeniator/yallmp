@@ -1,6 +1,6 @@
 import pytest
 import time
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch
 from httpx import Response as HTTPXResponse, Request as HTTPXRequest, ConnectError, RequestError
 from fastapi.responses import JSONResponse
 

@@ -1,5 +1,4 @@
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Route

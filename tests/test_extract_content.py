@@ -1,4 +1,3 @@
-import json
 import pytest
 from fastapi.responses import JSONResponse
 from httpx import Response as HTTPXResponse, Request as HTTPXRequest
