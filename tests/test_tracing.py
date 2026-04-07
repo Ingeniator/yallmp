@@ -26,7 +26,7 @@ class TestGetEmitter:
         with patch("app.services.tracing.settings") as mock_settings, \
              patch("app.services.tracing.logger"), \
              patch.dict("sys.modules", {"langfuse": MagicMock()}), \
-             patch("app.services.langfuse_tracing.LangfuseEmitter", return_value=mock_emitter) as mock_cls:
+             patch("app.services.langfuse_tracing.LangfuseEmitter", return_value=mock_emitter):
             mock_settings.tracing_enabled = True
             mock_settings.tracing_backend = "langfuse"
 

@@ -44,7 +44,7 @@ async def test_proxy_passes_query_parameters():
         mock_settings.proxy_window_size = 60
         mock_settings.proxy_recovery_time = 30
 
-        response = await proxy_request_with_retries(
+        await proxy_request_with_retries(
             client=mock_client,
             path="v1/models",
             request=request,
@@ -95,7 +95,7 @@ async def test_proxy_works_without_query_parameters():
         mock_settings.proxy_window_size = 60
         mock_settings.proxy_recovery_time = 30
 
-        response = await proxy_request_with_retries(
+        await proxy_request_with_retries(
             client=mock_client,
             path="v1/models",
             request=request,
