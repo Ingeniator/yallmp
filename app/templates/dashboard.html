@@ -35,11 +35,10 @@
     <span><span class="status-dot ok" id="statusDot"></span>Updated: <span id="lastUpdated">-</span></span>
     <label>Time window:
       <select id="timeWindow">
-        <option value="">All time</option>
         <option value="1h">Last 1 hour</option>
         <option value="1d" selected>Last 1 day</option>
-        <option value="7d">Last 7 days</option>
-        <option value="30d">Last 30 days</option>
+        <option value="7d">Last week</option>
+        <option value="last_month">Last month</option>
         <option value="custom">Custom range</option>
       </select>
     </label>
@@ -204,6 +203,12 @@
       const e = document.getElementById('rangeEnd').value;
       if (s) params.set('start', s);
       if (e) params.set('end', e);
+    } else if (tw === 'last_month') {
+      const now = new Date();
+      const start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const end = new Date(now.getFullYear(), now.getMonth(), 1);
+      params.set('start', start.toISOString().slice(0, 19));
+      params.set('end', end.toISOString().slice(0, 19));
     } else if (tw) {
       params.set('time_window', tw);
     }
