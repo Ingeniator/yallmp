@@ -46,13 +46,16 @@ def _filter_by_endpoint(entries, patterns):
     return [e for e in entries if _matches_any_pattern(e.get("endpoint", ""), patterns)]
 
 
-def _filter_by_group(entries, group_id, is_org_admin):
+def _filter_by_group(entries, group_id, is_org_admin, is_super_admin=False):
     """Filter entries by group_id label.
 
+    - is_super_admin → no filtering (show all)
     - group_id is None  → no filtering (show all)
     - is_org_admin and group_id has org prefix → prefix match on "org/"
     - otherwise → exact match on group_id
     """
+    if is_super_admin:
+        return entries
     if not group_id:
         return entries
     if is_org_admin and "/" in group_id:
@@ -160,7 +163,7 @@ def _parse_custom_range(start: str, end: str):
         return None, None
 
 
-async def get_dashboard_json(group_id=None, is_org_admin=False, registry=None, time_window="", start="", end=""):
+async def get_dashboard_json(group_id=None, is_org_admin=False, is_super_admin=False, registry=None, time_window="", start="", end=""):
     """Build complete dashboard payload with raw data and pre-aggregated summary.
 
     Args:
@@ -196,6 +199,7 @@ async def get_dashboard_json(group_id=None, is_org_admin=False, registry=None, t
             timeout=settings.dashboard_prometheus_timeout,
             group_id=group_id,
             is_org_admin=is_org_admin,
+            is_super_admin=is_super_admin,
             endpoint_patterns=patterns,
             auth=prom_auth,
             verify=prom_verify,
@@ -210,10 +214,10 @@ async def get_dashboard_json(group_id=None, is_org_admin=False, registry=None, t
     else:
         # Local mode (existing behavior)
         data = parse_metrics_to_dict(registry or REGISTRY)
-        filtered_requests = _filter_by_group(_filter_by_endpoint(data["http_requests"], patterns), group_id, is_org_admin)
-        filtered_duration = _filter_by_group(_filter_by_endpoint(data["http_duration"], patterns), group_id, is_org_admin)
-        filtered_tokens = _filter_by_group(data["token_usage"], group_id, is_org_admin)
-        filtered_cost = _filter_by_group(data["cost"], group_id, is_org_admin)
+        filtered_requests = _filter_by_group(_filter_by_endpoint(data["http_requests"], patterns), group_id, is_org_admin, is_super_admin)
+        filtered_duration = _filter_by_group(_filter_by_endpoint(data["http_duration"], patterns), group_id, is_org_admin, is_super_admin)
+        filtered_tokens = _filter_by_group(data["token_usage"], group_id, is_org_admin, is_super_admin)
+        filtered_cost = _filter_by_group(data["cost"], group_id, is_org_admin, is_super_admin)
 
     # Shared aggregation for both backends
     summary = {
