@@ -6,13 +6,16 @@ import httpx
 logger = logging.getLogger(__name__)
 
 
-def _build_group_filter(group_id, is_org_admin):
+def _build_group_filter(group_id, is_org_admin, is_super_admin=False):
     """Build a PromQL label matcher for group_id filtering.
 
+    - is_super_admin → "" (no filter, sees all spaces)
     - None → "" (no filter)
     - is_org_admin with org prefix → group_id=~"org/.*"
     - exact → group_id="val"
     """
+    if is_super_admin:
+        return ""
     if not group_id:
         return ""
     if is_org_admin and "/" in group_id:
@@ -87,7 +90,7 @@ def _extract_metric_entries(results, extra_fields=None):
     return entries
 
 
-async def fetch_metrics_from_prometheus(url, timeout, group_id, is_org_admin, endpoint_patterns, auth=None, verify=True, time_window="", eval_time=None):
+async def fetch_metrics_from_prometheus(url, timeout, group_id, is_org_admin, endpoint_patterns, auth=None, verify=True, time_window="", eval_time=None, is_super_admin=False):
     """Query Prometheus HTTP API for all dashboard metrics.
 
     Returns a dict matching the shape of parse_metrics_to_dict:
@@ -96,7 +99,7 @@ async def fetch_metrics_from_prometheus(url, timeout, group_id, is_org_admin, en
     When time_window is set (e.g. "1d", "7d"), counters are wrapped with
     increase(metric[window]) to return the delta over that period.
     """
-    group_filter = _build_group_filter(group_id, is_org_admin)
+    group_filter = _build_group_filter(group_id, is_org_admin, is_super_admin)
     endpoint_filter = _build_endpoint_filter(endpoint_patterns)
     token_selector = _build_selector(group_filter)
     http_selector = _build_selector(group_filter, endpoint_filter)

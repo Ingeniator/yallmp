@@ -214,9 +214,12 @@ def create_app() -> FastAPI:
             end: str = "",
         ):
             group_id = request.headers.get("x-group-id")
-            is_org_admin = request.headers.get("x-role", "").upper() == "ORG_ADMIN"
+            role = request.headers.get("x-role", "").upper()
+            is_org_admin = role == "ORG_ADMIN"
+            is_super_admin = role == "SUPER_ADMIN"
             return await get_dashboard_json(
                 group_id=group_id, is_org_admin=is_org_admin,
+                is_super_admin=is_super_admin,
                 time_window=time_window, start=start, end=end,
             )
 
