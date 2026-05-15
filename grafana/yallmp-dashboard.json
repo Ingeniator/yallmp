@@ -1,14 +1,4 @@
 {
-  "__inputs": [
-    {
-      "name": "DS_PROMETHEUS",
-      "label": "Prometheus",
-      "description": "",
-      "type": "datasource",
-      "pluginId": "prometheus",
-      "pluginName": "Prometheus"
-    }
-  ],
   "__requires": [
     { "type": "grafana", "id": "grafana", "name": "Grafana", "version": "10.0.0" },
     { "type": "datasource", "id": "prometheus", "name": "Prometheus" },
@@ -29,11 +19,36 @@
   "templating": {
     "list": [
       {
+        "name": "datasource",
+        "label": "Data source",
+        "type": "datasource",
+        "query": "prometheus",
+        "refresh": 1,
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "current": {},
+        "options": [],
+        "regex": ""
+      },
+      {
+        "name": "job",
+        "label": "Job",
+        "type": "query",
+        "datasource": "${datasource}",
+        "query": "label_values(http_requests_total, job)",
+        "refresh": 2,
+        "includeAll": false,
+        "multi": false,
+        "current": {}
+      },
+      {
         "name": "instance",
         "type": "query",
-        "datasource": "${DS_PROMETHEUS}",
-        "query": "label_values(http_requests_total{job=\"yallmp\"}, instance)",
+        "datasource": "${datasource}",
+        "query": "label_values(http_requests_total{job=~\"$job\"}, instance)",
         "refresh": 2,
+        "allValue": ".*",
         "includeAll": true,
         "multi": true,
         "current": { "text": "All", "value": "$__all" }
@@ -41,9 +56,10 @@
       {
         "name": "group_id",
         "type": "query",
-        "datasource": "${DS_PROMETHEUS}",
-        "query": "label_values(http_requests_total{job=\"yallmp\"}, group_id)",
+        "datasource": "${datasource}",
+        "query": "label_values(http_requests_total{job=~\"$job\"}, group_id)",
         "refresh": 2,
+        "allValue": ".*",
         "includeAll": true,
         "multi": true,
         "current": { "text": "All", "value": "$__all" }
@@ -51,9 +67,10 @@
       {
         "name": "model",
         "type": "query",
-        "datasource": "${DS_PROMETHEUS}",
+        "datasource": "${datasource}",
         "query": "label_values(llm_requests_total{group_id=~\"$group_id\"}, model)",
         "refresh": 2,
+        "allValue": ".*",
         "includeAll": true,
         "multi": true,
         "current": { "text": "All", "value": "$__all" }
@@ -71,7 +88,7 @@
     {
       "title": "Request Rate",
       "type": "stat",
-      "datasource": "${DS_PROMETHEUS}",
+      "datasource": "${datasource}",
       "gridPos": { "h": 4, "w": 6, "x": 0, "y": 1 },
       "fieldConfig": {
         "defaults": { "unit": "reqps", "thresholds": { "steps": [{ "color": "green", "value": null }] } },
@@ -80,7 +97,8 @@
       "options": { "graphMode": "area", "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } },
       "targets": [
         {
-          "expr": "sum(rate(http_requests_total{job=\"yallmp\", instance=~\"$instance\"}[$__rate_interval]))",
+          "datasource": "${datasource}",
+          "expr":"sum(rate(http_requests_total{job=~\"$job\", instance=~\"$instance\"}[$__rate_interval]))",
           "legendFormat": ""
         }
       ]
@@ -88,7 +106,7 @@
     {
       "title": "Error Rate (5xx)",
       "type": "stat",
-      "datasource": "${DS_PROMETHEUS}",
+      "datasource": "${datasource}",
       "gridPos": { "h": 4, "w": 6, "x": 6, "y": 1 },
       "fieldConfig": {
         "defaults": {
@@ -100,7 +118,8 @@
       "options": { "graphMode": "area", "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } },
       "targets": [
         {
-          "expr": "sum(rate(http_requests_total{job=\"yallmp\", instance=~\"$instance\", status_code=~\"5..\"}[$__rate_interval]))",
+          "datasource": "${datasource}",
+          "expr":"sum(rate(http_requests_total{job=~\"$job\", instance=~\"$instance\", status_code=~\"5..\"}[$__rate_interval]))",
           "legendFormat": ""
         }
       ]
@@ -108,7 +127,7 @@
     {
       "title": "P95 Latency",
       "type": "stat",
-      "datasource": "${DS_PROMETHEUS}",
+      "datasource": "${datasource}",
       "gridPos": { "h": 4, "w": 6, "x": 12, "y": 1 },
       "fieldConfig": {
         "defaults": {
@@ -120,7 +139,8 @@
       "options": { "graphMode": "area", "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job=\"yallmp\", instance=~\"$instance\"}[$__rate_interval])) by (le))",
+          "datasource": "${datasource}",
+          "expr":"histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job=~\"$job\", instance=~\"$instance\"}[$__rate_interval])) by (le))",
           "legendFormat": ""
         }
       ]
@@ -128,7 +148,7 @@
     {
       "title": "LLM Requests / min",
       "type": "stat",
-      "datasource": "${DS_PROMETHEUS}",
+      "datasource": "${datasource}",
       "gridPos": { "h": 4, "w": 6, "x": 18, "y": 1 },
       "fieldConfig": {
         "defaults": { "unit": "short", "thresholds": { "steps": [{ "color": "blue", "value": null }] } },
@@ -137,7 +157,8 @@
       "options": { "graphMode": "area", "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } },
       "targets": [
         {
-          "expr": "sum(rate(llm_requests_total{group_id=~\"$group_id\"}[$__rate_interval])) * 60",
+          "datasource": "${datasource}",
+          "expr":"sum(rate(llm_requests_total{group_id=~\"$group_id\"}[$__rate_interval])) * 60",
           "legendFormat": ""
         }
       ]
@@ -152,7 +173,7 @@
     {
       "title": "Request Rate by Endpoint",
       "type": "timeseries",
-      "datasource": "${DS_PROMETHEUS}",
+      "datasource": "${datasource}",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
       "fieldConfig": {
         "defaults": { "unit": "reqps", "custom": { "fillOpacity": 15, "stacking": { "mode": "normal" } } },
@@ -161,7 +182,8 @@
       "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] } },
       "targets": [
         {
-          "expr": "sum by (endpoint) (rate(http_requests_total{job=\"yallmp\", instance=~\"$instance\", group_id=~\"$group_id\"}[$__rate_interval]))",
+          "datasource": "${datasource}",
+          "expr":"sum by (endpoint) (rate(http_requests_total{job=~\"$job\", instance=~\"$instance\", group_id=~\"$group_id\"}[$__rate_interval]))",
           "legendFormat": "{{ endpoint }}"
         }
       ]
@@ -169,7 +191,7 @@
     {
       "title": "Request Rate by Status Code",
       "type": "timeseries",
-      "datasource": "${DS_PROMETHEUS}",
+      "datasource": "${datasource}",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
       "fieldConfig": {
         "defaults": { "unit": "reqps", "custom": { "fillOpacity": 15, "stacking": { "mode": "normal" } } },
@@ -182,7 +204,8 @@
       "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] } },
       "targets": [
         {
-          "expr": "sum by (status_code) (rate(http_requests_total{job=\"yallmp\", instance=~\"$instance\", group_id=~\"$group_id\"}[$__rate_interval]))",
+          "datasource": "${datasource}",
+          "expr":"sum by (status_code) (rate(http_requests_total{job=~\"$job\", instance=~\"$instance\", group_id=~\"$group_id\"}[$__rate_interval]))",
           "legendFormat": "{{ status_code }}"
         }
       ]
@@ -197,7 +220,7 @@
     {
       "title": "Request Latency (p50 / p95 / p99)",
       "type": "timeseries",
-      "datasource": "${DS_PROMETHEUS}",
+      "datasource": "${datasource}",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 15 },
       "fieldConfig": {
         "defaults": { "unit": "s", "custom": { "fillOpacity": 10 } },
@@ -206,15 +229,18 @@
       "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] } },
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket{job=\"yallmp\", instance=~\"$instance\", group_id=~\"$group_id\"}[$__rate_interval])) by (le))",
+          "datasource": "${datasource}",
+          "expr":"histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket{job=~\"$job\", instance=~\"$instance\", group_id=~\"$group_id\"}[$__rate_interval])) by (le))",
           "legendFormat": "p50"
         },
         {
-          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job=\"yallmp\", instance=~\"$instance\", group_id=~\"$group_id\"}[$__rate_interval])) by (le))",
+          "datasource": "${datasource}",
+          "expr":"histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job=~\"$job\", instance=~\"$instance\", group_id=~\"$group_id\"}[$__rate_interval])) by (le))",
           "legendFormat": "p95"
         },
         {
-          "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{job=\"yallmp\", instance=~\"$instance\", group_id=~\"$group_id\"}[$__rate_interval])) by (le))",
+          "datasource": "${datasource}",
+          "expr":"histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{job=~\"$job\", instance=~\"$instance\", group_id=~\"$group_id\"}[$__rate_interval])) by (le))",
           "legendFormat": "p99"
         }
       ]
@@ -222,7 +248,7 @@
     {
       "title": "Latency by Endpoint (p95)",
       "type": "timeseries",
-      "datasource": "${DS_PROMETHEUS}",
+      "datasource": "${datasource}",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 15 },
       "fieldConfig": {
         "defaults": { "unit": "s", "custom": { "fillOpacity": 10 } },
@@ -231,7 +257,8 @@
       "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] } },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum by (le, endpoint) (rate(http_request_duration_seconds_bucket{job=\"yallmp\", instance=~\"$instance\", group_id=~\"$group_id\"}[$__rate_interval])))",
+          "datasource": "${datasource}",
+          "expr":"histogram_quantile(0.95, sum by (le, endpoint) (rate(http_request_duration_seconds_bucket{job=~\"$job\", instance=~\"$instance\", group_id=~\"$group_id\"}[$__rate_interval])))",
           "legendFormat": "{{ endpoint }}"
         }
       ]
@@ -246,7 +273,7 @@
     {
       "title": "LLM Requests by Model",
       "type": "timeseries",
-      "datasource": "${DS_PROMETHEUS}",
+      "datasource": "${datasource}",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
       "fieldConfig": {
         "defaults": { "unit": "reqps", "custom": { "fillOpacity": 15, "stacking": { "mode": "normal" } } },
@@ -255,7 +282,8 @@
       "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum", "mean"] } },
       "targets": [
         {
-          "expr": "sum by (model) (rate(llm_requests_total{group_id=~\"$group_id\", model=~\"$model\"}[$__rate_interval]))",
+          "datasource": "${datasource}",
+          "expr":"sum by (model) (rate(llm_requests_total{group_id=~\"$group_id\", model=~\"$model\"}[$__rate_interval]))",
           "legendFormat": "{{ model }}"
         }
       ]
@@ -263,7 +291,7 @@
     {
       "title": "LLM Requests by Provider",
       "type": "timeseries",
-      "datasource": "${DS_PROMETHEUS}",
+      "datasource": "${datasource}",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
       "fieldConfig": {
         "defaults": { "unit": "reqps", "custom": { "fillOpacity": 15, "stacking": { "mode": "normal" } } },
@@ -272,7 +300,8 @@
       "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum", "mean"] } },
       "targets": [
         {
-          "expr": "sum by (provider) (rate(llm_requests_total{group_id=~\"$group_id\"}[$__rate_interval]))",
+          "datasource": "${datasource}",
+          "expr":"sum by (provider) (rate(llm_requests_total{group_id=~\"$group_id\"}[$__rate_interval]))",
           "legendFormat": "{{ provider }}"
         }
       ]
@@ -287,7 +316,7 @@
     {
       "title": "Total Tokens / min",
       "type": "timeseries",
-      "datasource": "${DS_PROMETHEUS}",
+      "datasource": "${datasource}",
       "gridPos": { "h": 8, "w": 8, "x": 0, "y": 33 },
       "fieldConfig": {
         "defaults": { "unit": "short", "custom": { "fillOpacity": 15, "stacking": { "mode": "normal" } } },
@@ -296,7 +325,8 @@
       "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum", "mean"] } },
       "targets": [
         {
-          "expr": "sum by (model) (rate(llm_total_token_usage{group_id=~\"$group_id\", model=~\"$model\"}[$__rate_interval])) * 60",
+          "datasource": "${datasource}",
+          "expr":"sum by (model) (rate(llm_total_token_usage_total{group_id=~\"$group_id\", model=~\"$model\"}[$__rate_interval])) * 60",
           "legendFormat": "{{ model }}"
         }
       ]
@@ -304,7 +334,7 @@
     {
       "title": "Prompt vs Completion Tokens / min",
       "type": "timeseries",
-      "datasource": "${DS_PROMETHEUS}",
+      "datasource": "${datasource}",
       "gridPos": { "h": 8, "w": 8, "x": 8, "y": 33 },
       "fieldConfig": {
         "defaults": { "unit": "short", "custom": { "fillOpacity": 15, "stacking": { "mode": "normal" } } },
@@ -316,11 +346,13 @@
       "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum", "mean"] } },
       "targets": [
         {
-          "expr": "sum(rate(llm_prompt_token_usage{group_id=~\"$group_id\", model=~\"$model\"}[$__rate_interval])) * 60",
+          "datasource": "${datasource}",
+          "expr":"sum(rate(llm_prompt_token_usage_total{group_id=~\"$group_id\", model=~\"$model\"}[$__rate_interval])) * 60",
           "legendFormat": "prompt"
         },
         {
-          "expr": "sum(rate(llm_completion_token_usage{group_id=~\"$group_id\", model=~\"$model\"}[$__rate_interval])) * 60",
+          "datasource": "${datasource}",
+          "expr":"sum(rate(llm_completion_token_usage_total{group_id=~\"$group_id\", model=~\"$model\"}[$__rate_interval])) * 60",
           "legendFormat": "completion"
         }
       ]
@@ -328,7 +360,7 @@
     {
       "title": "Tokens by Group",
       "type": "timeseries",
-      "datasource": "${DS_PROMETHEUS}",
+      "datasource": "${datasource}",
       "gridPos": { "h": 8, "w": 8, "x": 16, "y": 33 },
       "fieldConfig": {
         "defaults": { "unit": "short", "custom": { "fillOpacity": 15, "stacking": { "mode": "normal" } } },
@@ -337,7 +369,8 @@
       "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum", "mean"] } },
       "targets": [
         {
-          "expr": "sum by (group_id) (rate(llm_total_token_usage{group_id=~\"$group_id\", group_id!=\"\", model=~\"$model\"}[$__rate_interval])) * 60",
+          "datasource": "${datasource}",
+          "expr":"sum by (group_id) (rate(llm_total_token_usage_total{group_id=~\"$group_id\", group_id!=\"\", model=~\"$model\"}[$__rate_interval])) * 60",
           "legendFormat": "{{ group_id }}"
         }
       ]
@@ -352,7 +385,7 @@
     {
       "title": "Cost Rate by Model ($/hr)",
       "type": "timeseries",
-      "datasource": "${DS_PROMETHEUS}",
+      "datasource": "${datasource}",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 42 },
       "fieldConfig": {
         "defaults": { "unit": "currencyUSD", "custom": { "fillOpacity": 15, "stacking": { "mode": "normal" } } },
@@ -361,7 +394,8 @@
       "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum", "lastNotNull"] } },
       "targets": [
         {
-          "expr": "sum by (model) (rate(llm_cost{group_id=~\"$group_id\", model=~\"$model\"}[$__rate_interval])) * 3600",
+          "datasource": "${datasource}",
+          "expr":"sum by (model) (rate(llm_cost_total{group_id=~\"$group_id\", model=~\"$model\"}[$__rate_interval])) * 3600",
           "legendFormat": "{{ model }}"
         }
       ]
@@ -369,7 +403,7 @@
     {
       "title": "Cost Rate by Group ($/hr)",
       "type": "timeseries",
-      "datasource": "${DS_PROMETHEUS}",
+      "datasource": "${datasource}",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 42 },
       "fieldConfig": {
         "defaults": { "unit": "currencyUSD", "custom": { "fillOpacity": 15, "stacking": { "mode": "normal" } } },
@@ -378,7 +412,8 @@
       "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum", "lastNotNull"] } },
       "targets": [
         {
-          "expr": "sum by (group_id) (rate(llm_cost{group_id=~\"$group_id\", group_id!=\"\"}[$__rate_interval])) * 3600",
+          "datasource": "${datasource}",
+          "expr":"sum by (group_id) (rate(llm_cost_total{group_id=~\"$group_id\", group_id!=\"\"}[$__rate_interval])) * 3600",
           "legendFormat": "{{ group_id }}"
         }
       ]
@@ -393,7 +428,7 @@
     {
       "title": "503 Responses (Circuit Breaker)",
       "type": "timeseries",
-      "datasource": "${DS_PROMETHEUS}",
+      "datasource": "${datasource}",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 51 },
       "fieldConfig": {
         "defaults": {
@@ -406,7 +441,8 @@
       "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
       "targets": [
         {
-          "expr": "sum(rate(http_requests_total{job=\"yallmp\", instance=~\"$instance\", status_code=\"503\"}[$__rate_interval])) * 60",
+          "datasource": "${datasource}",
+          "expr":"sum(rate(http_requests_total{job=~\"$job\", instance=~\"$instance\", status_code=\"503\"}[$__rate_interval])) * 60",
           "legendFormat": "503s/min"
         }
       ]
@@ -414,7 +450,7 @@
     {
       "title": "Request Rate by Group",
       "type": "timeseries",
-      "datasource": "${DS_PROMETHEUS}",
+      "datasource": "${datasource}",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 51 },
       "fieldConfig": {
         "defaults": { "unit": "reqps", "custom": { "fillOpacity": 15, "stacking": { "mode": "normal" } } },
@@ -423,12 +459,80 @@
       "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum", "mean"] } },
       "targets": [
         {
-          "expr": "sum by (group_id) (rate(http_requests_total{job=\"yallmp\", instance=~\"$instance\", group_id=~\"$group_id\", group_id!=\"\"}[$__rate_interval]))",
+          "datasource": "${datasource}",
+          "expr":"sum by (group_id) (rate(http_requests_total{job=~\"$job\", instance=~\"$instance\", group_id=~\"$group_id\", group_id!=\"\"}[$__rate_interval]))",
           "legendFormat": "{{ group_id }}"
+        }
+      ]
+    },
+    {
+      "title": "Period Totals",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 60 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "title": "Total Tokens (selected period)",
+      "type": "stat",
+      "datasource": "${datasource}",
+      "description": "Total LLM tokens consumed over the dashboard's selected time range, filtered by the current group/model.",
+      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 61 },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "decimals": 0, "thresholds": { "steps": [{ "color": "blue", "value": null }] } },
+        "overrides": []
+      },
+      "options": { "graphMode": "none", "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        {
+          "datasource": "${datasource}",
+          "expr": "sum(increase(llm_total_token_usage_total{group_id=~\"$group_id\", model=~\"$model\"}[$__range]))",
+          "legendFormat": "",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "title": "LLM Requests (selected period)",
+      "type": "stat",
+      "datasource": "${datasource}",
+      "description": "Total LLM completion requests proxied over the dashboard's selected time range, filtered by the current group/model.",
+      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 61 },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "decimals": 0, "thresholds": { "steps": [{ "color": "green", "value": null }] } },
+        "overrides": []
+      },
+      "options": { "graphMode": "none", "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        {
+          "datasource": "${datasource}",
+          "expr": "sum(increase(llm_requests_total{group_id=~\"$group_id\", model=~\"$model\"}[$__range]))",
+          "legendFormat": "",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "title": "Cost Spent (selected period)",
+      "type": "stat",
+      "datasource": "${datasource}",
+      "description": "Total estimated LLM cost over the dashboard's selected time range, filtered by the current group/model.",
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 61 },
+      "fieldConfig": {
+        "defaults": { "unit": "currencyUSD", "decimals": 2, "thresholds": { "steps": [{ "color": "orange", "value": null }] } },
+        "overrides": []
+      },
+      "options": { "graphMode": "none", "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "targets": [
+        {
+          "datasource": "${datasource}",
+          "expr": "sum(increase(llm_cost_total{group_id=~\"$group_id\", model=~\"$model\"}[$__range]))",
+          "legendFormat": "",
+          "instant": true
         }
       ]
     }
   ],
   "schemaVersion": 39,
-  "version": 1
+  "version": 5
 }
