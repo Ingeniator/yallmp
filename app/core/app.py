@@ -54,10 +54,23 @@ async def lifespan(app: FastAPI):
 
     app.state.pricing_cache = pricing_cache
 
+    # Initialize billing Redis + limits
+    app.state.billing_redis = None
+    app.state.billing_limits = {}
+    if settings.billing_enabled:
+        import redis.asyncio as aioredis
+        from app.services.billing import load_limits
+        app.state.billing_redis = aioredis.from_url(settings.billing_redis_url, decode_responses=True)
+        app.state.billing_limits = load_limits(settings.billing_limits_path)
+        logger.info("Billing enabled", redis_url=settings.billing_redis_url)
+
     yield
 
     if pricing_cache:
         await pricing_cache.shutdown()
+
+    if app.state.billing_redis:
+        await app.state.billing_redis.aclose()
 
     from app.services.tracing import shutdown as tracing_shutdown
     tracing_shutdown()
@@ -81,6 +94,9 @@ def create_app() -> FastAPI:
     )
     # Add Logging Middleware
     app.add_middleware(LoggingMiddleware)
+    # Add Billing Middleware (limit enforcement, runs before Prometheus)
+    from app.middlewares.billing_middleware import BillingMiddleware
+    app.add_middleware(BillingMiddleware)
     # Add Prometheus middleware
     app.add_middleware(PrometheusMiddleware)
 
@@ -222,6 +238,18 @@ def create_app() -> FastAPI:
                 is_super_admin=is_super_admin,
                 time_window=time_window, start=start, end=end,
             )
+
+        @app.get("/dashboard/api/billing")
+        async def dashboard_api_billing(request: Request):
+            from app.services.billing import get_billing_summary
+            from app.core.security import sanitize_group_id
+            group_id = sanitize_group_id(request.headers.get("x-group-id"))
+            role = request.headers.get("x-role", "").upper()
+            redis = getattr(request.app.state, "billing_redis", None)
+            limits = getattr(request.app.state, "billing_limits", {})
+            if not redis or not settings.billing_enabled:
+                return {"enabled": False}
+            return await get_billing_summary(redis, limits, group_id, role)
 
 
     if settings.proxy_enabled:

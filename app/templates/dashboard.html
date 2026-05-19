@@ -25,6 +25,19 @@
   .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
   .status-dot.ok { background: #4caf50; }
   .status-dot.stale { background: #ff9800; }
+  .gauge-row { background: #fff; border-radius: 8px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 12px; }
+  .gauge-label { display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 6px; }
+  .gauge-label span:first-child { font-weight: 600; }
+  .gauge-label .gauge-pct { color: #666; }
+  .gauge-track { height: 10px; background: #e8ecf0; border-radius: 5px; overflow: hidden; }
+  .gauge-fill { height: 100%; border-radius: 5px; background: #4a90d9; transition: width 0.3s; }
+  .gauge-fill.warn { background: #f5a623; }
+  .gauge-fill.over { background: #d94a68; }
+  .billing-meta { font-size: 0.8rem; color: #888; margin-top: 6px; }
+  .export-bar { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+  .btn { display: inline-block; padding: 6px 14px; border-radius: 4px; font-size: 0.85rem; text-decoration: none; cursor: pointer; border: none; }
+  .btn-primary { background: #4a90d9; color: #fff; }
+  .btn-primary:hover { background: #3a7bc8; }
 </style>
 </head>
 <body>
@@ -81,6 +94,15 @@
     <thead><tr></tr></thead>
     <tbody></tbody>
   </table>
+</div>
+
+<div class="section" id="billingSection">
+  <h2>Billing &amp; Limits</h2>
+  <div class="export-bar">
+    <a id="exportLink" class="btn btn-primary" href="#" target="_blank">Download traces (JSONL)</a>
+    <span id="billingPeriod" style="line-height:2rem;font-size:0.85rem;color:#666;"></span>
+  </div>
+  <div id="billingGauges"><p class="empty-msg">Billing data not available.</p></div>
 </div>
 
 <div class="section" id="httpSection">
@@ -267,6 +289,74 @@
 
   fetchAndRender();
   setupRefresh();
+
+  // ── Billing section ──────────────────────────────────────────────────────
+  const BILLING_API = (window.location.pathname.replace(/\/$/, '')) + '/api/billing';
+  const LLOGR_EXPORT = window.location.origin + '/llogr/api/public/export';
+
+  function renderGauge(label, spent, limit, pct, alert) {
+    const cls = pct >= 100 ? 'over' : (alert ? 'warn' : '');
+    return `<div class="gauge-row">
+      <div class="gauge-label">
+        <span>${esc(label)}</span>
+        <span class="gauge-pct">${spent.toFixed(4)} / ${limit.toFixed(2)} USD &nbsp; ${pct.toFixed(1)}%</span>
+      </div>
+      <div class="gauge-track"><div class="gauge-fill ${cls}" style="width:${Math.min(pct,100)}%"></div></div>
+    </div>`;
+  }
+
+  function buildExportUrl(period) {
+    // period = "2026-05" (monthly) or "2026-W21" (weekly)
+    const now = new Date();
+    let start;
+    if (/^\d{4}-W\d+$/.test(period)) {
+      // weekly: start of current ISO week
+      const d = new Date(now);
+      d.setDate(d.getDate() - d.getDay() + 1);
+      d.setHours(0, 0, 0, 0);
+      start = d.toISOString().slice(0, 19);
+    } else {
+      // monthly
+      const [y, m] = period.split('-');
+      start = `${y}-${m}-01T00:00:00`;
+    }
+    const end = now.toISOString().slice(0, 19);
+    return `${LLOGR_EXPORT}?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`;
+  }
+
+  async function fetchAndRenderBilling() {
+    try {
+      const resp = await fetch(BILLING_API);
+      if (!resp.ok) return;
+      const data = await resp.json();
+      if (!data || data.enabled === false) return;
+
+      const gaugesEl = document.getElementById('billingGauges');
+      const periodEl = document.getElementById('billingPeriod');
+      const exportLink = document.getElementById('exportLink');
+
+      periodEl.textContent = `Period: ${data.period || ''}`;
+      exportLink.href = buildExportUrl(data.period || '');
+
+      let html = '';
+      (data.groups || []).forEach(g => {
+        html += renderGauge(`Group: ${g.org}`, g.group_spent, g.group_limit, g.group_pct, g.alert);
+      });
+      if (data.user) {
+        const u = data.user;
+        const uPct = u.user_pct || 0;
+        html += renderGauge(`User: ${u.group_id}`, u.user_spent, u.user_limit, uPct, uPct >= 80);
+      }
+      gaugesEl.innerHTML = html || '<p class="empty-msg">No billing data for this period.</p>';
+    } catch (err) {
+      console.warn('Billing fetch error:', err);
+    }
+  }
+
+  fetchAndRenderBilling();
+  // Re-fetch billing on same refresh cycle
+  const origFetch = fetchAndRender;
+  window._billingRefresh = setInterval(fetchAndRenderBilling, 30000);
 })();
 </script>
 </body>
