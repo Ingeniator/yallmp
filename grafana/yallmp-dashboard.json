@@ -151,7 +151,7 @@
       "datasource": "${datasource}",
       "gridPos": { "h": 4, "w": 6, "x": 18, "y": 1 },
       "fieldConfig": {
-        "defaults": { "unit": "short", "thresholds": { "steps": [{ "color": "blue", "value": null }] } },
+        "defaults": { "unit": "none", "thresholds": { "steps": [{ "color": "blue", "value": null }] } },
         "overrides": []
       },
       "options": { "graphMode": "area", "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } },
@@ -319,7 +319,7 @@
       "datasource": "${datasource}",
       "gridPos": { "h": 8, "w": 8, "x": 0, "y": 33 },
       "fieldConfig": {
-        "defaults": { "unit": "short", "custom": { "fillOpacity": 15, "stacking": { "mode": "normal" } } },
+        "defaults": { "unit": "none", "custom": { "fillOpacity": 15, "stacking": { "mode": "normal" } } },
         "overrides": []
       },
       "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum", "mean"] } },
@@ -337,7 +337,7 @@
       "datasource": "${datasource}",
       "gridPos": { "h": 8, "w": 8, "x": 8, "y": 33 },
       "fieldConfig": {
-        "defaults": { "unit": "short", "custom": { "fillOpacity": 15, "stacking": { "mode": "normal" } } },
+        "defaults": { "unit": "none", "custom": { "fillOpacity": 15, "stacking": { "mode": "normal" } } },
         "overrides": [
           { "matcher": { "id": "byRegexp", "options": "prompt.*" }, "properties": [{ "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } }] },
           { "matcher": { "id": "byRegexp", "options": "completion.*" }, "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] }
@@ -363,7 +363,7 @@
       "datasource": "${datasource}",
       "gridPos": { "h": 8, "w": 8, "x": 16, "y": 33 },
       "fieldConfig": {
-        "defaults": { "unit": "short", "custom": { "fillOpacity": 15, "stacking": { "mode": "normal" } } },
+        "defaults": { "unit": "none", "custom": { "fillOpacity": 15, "stacking": { "mode": "normal" } } },
         "overrides": []
       },
       "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum", "mean"] } },
@@ -432,7 +432,7 @@
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 51 },
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
+          "unit": "none",
           "custom": { "fillOpacity": 15 },
           "color": { "fixedColor": "red", "mode": "fixed" }
         },
@@ -479,7 +479,7 @@
       "description": "Total LLM tokens consumed over the dashboard's selected time range, filtered by the current group/model.",
       "gridPos": { "h": 4, "w": 8, "x": 0, "y": 61 },
       "fieldConfig": {
-        "defaults": { "unit": "short", "decimals": 0, "thresholds": { "steps": [{ "color": "blue", "value": null }] } },
+        "defaults": { "unit": "none", "decimals": 0, "thresholds": { "steps": [{ "color": "blue", "value": null }] } },
         "overrides": []
       },
       "options": { "graphMode": "none", "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } },
@@ -499,7 +499,7 @@
       "description": "Total LLM completion requests proxied over the dashboard's selected time range, filtered by the current group/model.",
       "gridPos": { "h": 4, "w": 8, "x": 8, "y": 61 },
       "fieldConfig": {
-        "defaults": { "unit": "short", "decimals": 0, "thresholds": { "steps": [{ "color": "green", "value": null }] } },
+        "defaults": { "unit": "none", "decimals": 0, "thresholds": { "steps": [{ "color": "green", "value": null }] } },
         "overrides": []
       },
       "options": { "graphMode": "none", "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] } },
@@ -534,5 +534,5 @@
     }
   ],
   "schemaVersion": 39,
-  "version": 5
+  "version": 6
 }
