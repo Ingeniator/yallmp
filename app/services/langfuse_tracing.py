@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections import OrderedDict
 
+from langfuse import Langfuse, propagate_attributes
+
 from app.core.config import settings
 from app.core.logging_config import setup_logging
 
@@ -74,6 +76,7 @@ class LangfuseEmitter:
         is_streaming: bool,
         cost: float | None = None,
         session_id: str | None = None,
+        trace_id: str | None = None,
     ) -> None:
         client = self._get_client(group_id)
 
@@ -93,29 +96,28 @@ class LangfuseEmitter:
             "status_code": status_code,
             "duration_ms": duration_ms,
         }
-        if session_id:
-            metadata["session_id"] = session_id
-
         cost_details = None
         if cost is not None:
             cost_details = {"total": cost}
             metadata["cost"] = cost
 
         trace_name = model or "llm-proxy"
-        with client.start_as_current_observation(
-            name=trace_name,
-            as_type="generation",
-            model=model,
-            input=input_body,
-            output=output_body,
-            metadata=metadata,
-            usage_details=usage_details or None,
-            cost_details=cost_details,
-        ):
-            if session_id:
-                from langfuse import propagate_attributes
-                with propagate_attributes(session_id=session_id):
-                    pass
+        valid_trace_id = Langfuse.create_trace_id(seed=trace_id) if trace_id else None
+        trace_context = {"trace_id": valid_trace_id} if valid_trace_id else None
+
+        with propagate_attributes(session_id=session_id or None):
+            with client.start_as_current_observation(
+                name=trace_name,
+                as_type="generation",
+                model=model,
+                input=input_body,
+                output=output_body,
+                metadata=metadata,
+                usage_details=usage_details or None,
+                cost_details=cost_details,
+                trace_context=trace_context,
+            ):
+                pass
 
     def get_langchain_callback(self, trace_name: str, metadata: dict) -> object | None:
         try:

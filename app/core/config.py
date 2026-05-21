@@ -98,6 +98,9 @@ class AppSettings(BaseSettings):
     chain_default_available_chat_models: list[str] = ["Gigachat:latest", "GigaChat-Pro", "GigaChat-Max", "Gigachat-2:latest", "DeepSeek-R1"]
     chain_default_json_file: str = "./data/langchain/default.json"
 
+    # Dev role switcher (docker-compose only — never enable in production)
+    dashboard_dev_role_switcher: bool = False
+
     # Billing
     billing_enabled: bool = False
     billing_redis_url: str = "redis://langfuse-redis:6379/0"

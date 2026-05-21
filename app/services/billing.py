@@ -96,10 +96,9 @@ async def get_billing_summary(redis, limits: dict, group_id: str, role: str) -> 
 
     try:
         if is_super_admin:
-            # Scan all group keys for this period
-            keys = [k.decode() async for k in redis.scan_iter(f"billing:group:*:{pk}")]
+            keys = [k async for k in redis.scan_iter(f"billing:group:*:{pk}")]
         elif is_org_admin:
-            keys = [k.decode() async for k in redis.scan_iter(f"billing:group:{org}*:{pk}")]
+            keys = [k async for k in redis.scan_iter(f"billing:group:{org}*:{pk}")]
         else:
             keys = [f"billing:group:{org}:{pk}"]
 
@@ -111,10 +110,6 @@ async def get_billing_summary(redis, limits: dict, group_id: str, role: str) -> 
             key_tier = get_tier(limits, key_org)
             groups.append({
                 "org": key_org,
-                "tier": next(
-                    (k for k, v in limits.get("orgs", {}).items() if v == next(
-                        (t for t, cfg in limits.get("tiers", {}).items() if cfg == key_tier), ""
-                    )), ""),
                 "period": pk,
                 "group_limit": key_tier["group_limit"],
                 "group_spent": round(spent, 6),
@@ -122,7 +117,26 @@ async def get_billing_summary(redis, limits: dict, group_id: str, role: str) -> 
                 "alert": spent >= key_tier["group_limit"] * key_tier.get("alert_threshold", 0.8),
             })
 
-        # User spend for own group_id
+        # Per-user breakdown for admins
+        users = []
+        if is_org_admin or is_super_admin:
+            user_pattern = f"billing:user:{org}/*:{pk}" if is_org_admin else f"billing:user:*:{pk}"
+            async for ukey in redis.scan_iter(user_pattern):
+                uval = await redis.get(ukey)
+                u_spent = float(uval or 0)
+                parts = ukey.split(":")
+                u_group_id = parts[2] if len(parts) >= 4 else ""
+                u_org = u_group_id.split("/")[0]
+                u_tier = get_tier(limits, u_org)
+                users.append({
+                    "group_id": u_group_id,
+                    "user_limit": u_tier["user_limit"],
+                    "user_spent": round(u_spent, 6),
+                    "user_pct": round(u_spent / u_tier["user_limit"] * 100, 1) if u_tier["user_limit"] else 0,
+                })
+            users.sort(key=lambda x: x["user_spent"], reverse=True)
+
+        # Current user's own spend
         user_spent = 0.0
         user_limit = tier["user_limit"]
         if "/" in (group_id or ""):
@@ -132,6 +146,7 @@ async def get_billing_summary(redis, limits: dict, group_id: str, role: str) -> 
         return {
             "period": pk,
             "groups": groups,
+            "users": users,
             "user": {
                 "group_id": group_id,
                 "user_limit": user_limit,

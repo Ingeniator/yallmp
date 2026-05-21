@@ -153,3 +153,80 @@ async def fetch_metrics_from_prometheus(url, timeout, group_id, is_org_admin, en
         "http_duration": http_duration,
         "cost": cost,
     }
+
+
+async def _query_prometheus_range(client, url, query, start, end, step):
+    """Execute a PromQL range query. Returns result list or empty on error."""
+    try:
+        resp = await client.post(
+            f"{url}/api/v1/query_range",
+            data={"query": query, "start": str(start), "end": str(end), "step": str(step)},
+        )
+        if resp.status_code != 200:
+            logger.warning("Prometheus range query failed (HTTP %s): %s", resp.status_code, query)
+            return []
+        data = resp.json()
+        if data.get("status") != "success":
+            logger.warning("Prometheus range query non-success: %s", data.get("error", ""))
+            return []
+        return data["data"]["result"]
+    except Exception as exc:
+        logger.warning("Prometheus range query error: %s", exc)
+        return []
+
+
+_TREND_WINDOWS = {
+    "1h":  (3600,    300),    # 5 min step → ~12 points
+    "1d":  (86400,   3600),   # 1 h step   → 24 points
+    "7d":  (604800,  21600),  # 6 h step   → 28 points
+    "30d": (2592000, 86400),  # 1 d step   → 30 points
+}
+
+
+async def fetch_cost_trends(
+    url, timeout, group_id, is_org_admin, is_super_admin=False, auth=None, verify=True,
+    time_window="7d", group_by="group_id", start="", end="",
+):
+    """Fetch time-series cost data for line chart.
+
+    Returns {"available": True, "labels": [...], "series": [{"name": ..., "data": [...]}]}
+    """
+    import time as _time
+    from datetime import datetime, timezone
+
+    if start and end:
+        try:
+            s = datetime.fromisoformat(start).timestamp()
+            e = datetime.fromisoformat(end).timestamp()
+            duration = e - s
+            step = max(int(duration / 30), 60)
+        except (ValueError, TypeError):
+            return {"available": True, "labels": [], "series": []}
+    else:
+        duration, step = _TREND_WINDOWS.get(time_window, _TREND_WINDOWS["7d"])
+        e = _time.time()
+        s = e - duration
+
+    group_filter = _build_group_filter(group_id, is_org_admin, is_super_admin)
+    selector = _build_selector(group_filter)
+    query = f"sum(increase(llm_cost_total{selector}[{step}s])) by ({group_by})"
+
+    async with httpx.AsyncClient(timeout=timeout, auth=auth, verify=verify) as client:
+        results = await _query_prometheus_range(client, url, query, int(s), int(e), step)
+
+    if not results:
+        return {"available": True, "labels": [], "series": []}
+
+    all_ts = sorted({v[0] for r in results for v in r.get("values", [])})
+    labels = [
+        datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%m-%d %H:%M")
+        for ts in all_ts
+    ]
+    series = []
+    for r in results:
+        name = r["metric"].get(group_by, "unknown")
+        ts_to_val = {v[0]: float(v[1]) for v in r.get("values", [])}
+        data = [round(ts_to_val.get(ts, 0.0), 6) for ts in all_ts]
+        series.append({"name": name, "data": data})
+
+    return {"available": True, "labels": labels, "series": series}

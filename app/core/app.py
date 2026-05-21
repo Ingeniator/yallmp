@@ -213,14 +213,33 @@ def create_app() -> FastAPI:
 
     if settings.dashboard_enabled:
         from app.services.dashboard import get_dashboard_json
+        from app.core.security import sanitize_group_id
 
         _dashboard_html = pathlib.Path(__file__).resolve().parent.parent.joinpath(
             "templates", "dashboard.html"
         ).read_text()
 
+        def _effective_identity(request: Request) -> tuple[str, str]:
+            """Return (role, group_id), applying dev cookie override when enabled."""
+            role = request.headers.get("x-role", "").upper()
+            group_id = sanitize_group_id(request.headers.get("x-group-id", ""))
+            if settings.dashboard_dev_role_switcher:
+                from urllib.parse import unquote
+                cookie_role = request.cookies.get("dev_role", "").upper()
+                cookie_group = unquote(request.cookies.get("dev_group", ""))
+                if cookie_role:
+                    role = cookie_role
+                if cookie_group:
+                    group_id = sanitize_group_id(cookie_group)
+            return role, group_id
+
         @app.get("/dashboard")
         async def dashboard():
             return HTMLResponse(content=_dashboard_html)
+
+        @app.get("/dashboard/api/config")
+        async def dashboard_api_config():
+            return {"dev_switcher": settings.dashboard_dev_role_switcher}
 
         @app.get("/dashboard/api/metrics")
         async def dashboard_api_metrics(
@@ -229,28 +248,111 @@ def create_app() -> FastAPI:
             start: str = "",
             end: str = "",
         ):
-            group_id = request.headers.get("x-group-id")
-            role = request.headers.get("x-role", "").upper()
-            is_org_admin = role == "ORG_ADMIN"
-            is_super_admin = role == "SUPER_ADMIN"
+            role, group_id = _effective_identity(request)
             return await get_dashboard_json(
-                group_id=group_id, is_org_admin=is_org_admin,
-                is_super_admin=is_super_admin,
+                group_id=group_id,
+                is_org_admin=role == "ORG_ADMIN",
+                is_super_admin=role == "SUPER_ADMIN",
                 time_window=time_window, start=start, end=end,
             )
 
         @app.get("/dashboard/api/billing")
         async def dashboard_api_billing(request: Request):
             from app.services.billing import get_billing_summary
-            from app.core.security import sanitize_group_id
-            group_id = sanitize_group_id(request.headers.get("x-group-id"))
-            role = request.headers.get("x-role", "").upper()
+            role, group_id = _effective_identity(request)
             redis = getattr(request.app.state, "billing_redis", None)
             limits = getattr(request.app.state, "billing_limits", {})
             if not redis or not settings.billing_enabled:
                 return {"enabled": False}
             return await get_billing_summary(redis, limits, group_id, role)
 
+        @app.get("/dashboard/api/trends")
+        async def dashboard_api_trends(
+            request: Request,
+            time_window: str = "7d",
+            group_by: str = "group_id",
+            start: str = "",
+            end: str = "",
+        ):
+            if settings.dashboard_metrics_backend != "prometheus":
+                return {"available": False, "labels": [], "series": []}
+            from app.services.dashboard_prometheus import fetch_cost_trends
+            role, group_id = _effective_identity(request)
+            prom_auth = None
+            if settings.dashboard_prometheus_user:
+                prom_auth = (settings.dashboard_prometheus_user, settings.dashboard_prometheus_password)
+            prom_verify = (
+                settings.dashboard_prometheus_ca_bundle
+                if settings.dashboard_prometheus_ca_bundle
+                else settings.dashboard_prometheus_verify_ssl
+            )
+            return await fetch_cost_trends(
+                url=settings.dashboard_prometheus_url,
+                timeout=settings.dashboard_prometheus_timeout,
+                group_id=group_id,
+                is_org_admin=role == "ORG_ADMIN",
+                is_super_admin=role == "SUPER_ADMIN",
+                auth=prom_auth,
+                verify=prom_verify,
+                time_window=time_window,
+                group_by=group_by,
+                start=start,
+                end=end,
+            )
+
+        @app.get("/dashboard/api/who")
+        async def dashboard_api_who(request: Request):
+            role, group_id = _effective_identity(request)
+            if not role:
+                role = "USER"
+            org = group_id.split("/")[0] if group_id else ""
+            return {"role": role, "group_id": group_id, "org": org}
+
+        @app.get("/dashboard/api/sessions")
+        async def dashboard_api_sessions(
+            request: Request,
+            start: str = "",
+            end: str = "",
+            limit: int = 50,
+            offset: int = 0,
+        ):
+            if not settings.tracing_host:
+                return {"sessions": []}
+            import httpx as _httpx
+            role, group_id = _effective_identity(request)
+            params = {"limit": limit, "offset": offset}
+            if start:
+                params["start"] = start
+            if end:
+                params["end"] = end
+            try:
+                async with _httpx.AsyncClient(timeout=30) as client:
+                    resp = await client.get(
+                        f"{settings.tracing_host.rstrip('/')}/api/public/sessions",
+                        params=params,
+                        headers={"x-group-id": group_id, "x-role": role},
+                    )
+                    resp.raise_for_status()
+                    return resp.json()
+            except Exception as exc:
+                return {"sessions": [], "error": str(exc)}
+
+        @app.get("/dashboard/api/sessions/{session_id}")
+        async def dashboard_api_session_traces(session_id: str, request: Request):
+            if not settings.tracing_host:
+                return {"session_id": session_id, "traces": []}
+            import httpx as _httpx
+            role, group_id = _effective_identity(request)
+            try:
+                async with _httpx.AsyncClient(timeout=30) as client:
+                    resp = await client.get(
+                        f"{settings.tracing_host.rstrip('/')}/api/public/sessions/{session_id}",
+                        headers={"x-group-id": group_id, "x-role": role},
+                    )
+                    resp.raise_for_status()
+                    return resp.json()
+            except Exception as exc:
+                return {"session_id": session_id, "traces": [], "error": str(exc)}
 
     if settings.proxy_enabled:
         from app.core.proxy import proxy_request_with_retries, get_model_version, proxy_request_to_provider

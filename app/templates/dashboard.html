@@ -3,48 +3,132 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Metrics Dashboard</title>
+<title>AI Suite Dashboard</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f7fa; color: #333; padding: 20px; }
+
+  /* Header */
   .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; flex-wrap: wrap; gap: 12px; }
   .header h1 { font-size: 1.5rem; }
-  .header-right { display: flex; align-items: center; gap: 16px; font-size: 0.85rem; color: #666; }
-  .header-right select { padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; }
+  .header-left { display: flex; align-items: center; gap: 12px; }
+  .header-right { display: flex; align-items: center; gap: 16px; font-size: 0.85rem; color: #666; flex-wrap: wrap; }
+  .header-right select, .header-right input[type="datetime-local"] { padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; }
+
+  /* Role badge */
+  .role-badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 0.8rem; font-weight: 600; }
+  .role-badge.SUPER_ADMIN { background: #d94a68; color: #fff; }
+  .role-badge.ORG_ADMIN   { background: #4a90d9; color: #fff; }
+  .role-badge.USER        { background: #4caf50; color: #fff; }
+
+  /* Dev switcher */
+  .dev-switcher { display: flex; align-items: center; gap: 6px; padding: 4px 10px; background: #fff8e1; border: 1px solid #ffe082; border-radius: 6px; font-size: 0.78rem; }
+  .dev-switcher span { color: #888; white-space: nowrap; }
+  .dev-btn { padding: 2px 8px; border-radius: 4px; font-size: 0.78rem; cursor: pointer; border: 1px solid #ccc; background: #f5f5f5; color: #555; font-family: inherit; }
+  .dev-btn:hover { background: #e8e8e8; }
+  .dev-btn.active { border-color: #4a90d9; background: #4a90d9; color: #fff; }
+
+  /* KPI cards */
+  .kpi-row { display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
+  .kpi-card { flex: 1; min-width: 140px; background: #fff; border-radius: 8px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); text-align: center; }
+  .kpi-value { font-size: 1.6rem; font-weight: 700; color: #4a90d9; }
+  .kpi-label { font-size: 0.78rem; color: #888; margin-top: 4px; }
+
+  /* Sections */
   .section { margin-bottom: 32px; }
   .section h2 { font-size: 1.15rem; margin-bottom: 12px; border-bottom: 2px solid #4a90d9; padding-bottom: 4px; }
+
+  /* Charts */
   .charts-row { display: flex; gap: 20px; margin-bottom: 16px; flex-wrap: wrap; }
-  .chart-container { flex: 1; min-width: 300px; background: #fff; border-radius: 8px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+  .chart-container { flex: 1; min-width: 280px; background: #fff; border-radius: 8px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
   .chart-container h3 { font-size: 0.9rem; margin-bottom: 8px; color: #555; }
-  .chart-container canvas { width: 100% !important; max-height: 280px; }
+  .chart-container canvas { width: 100% !important; max-height: 260px; }
+  .chart-full { min-width: unset; width: 100%; }
+  .chart-full canvas { max-height: 320px; }
+
+  /* Tables */
   table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
   th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid #eee; font-size: 0.85rem; }
   th { background: #f0f4f8; font-weight: 600; color: #555; }
   tr:last-child td { border-bottom: none; }
   .empty-msg { color: #999; font-style: italic; padding: 16px; text-align: center; }
+  .unavail-msg { color: #aaa; font-style: italic; padding: 24px; text-align: center; }
+
+  /* Status */
   .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
-  .status-dot.ok { background: #4caf50; }
+  .status-dot.ok    { background: #4caf50; }
   .status-dot.stale { background: #ff9800; }
+
+  /* Billing gauges */
   .gauge-row { background: #fff; border-radius: 8px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 12px; }
   .gauge-label { display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 6px; }
   .gauge-label span:first-child { font-weight: 600; }
-  .gauge-label .gauge-pct { color: #666; }
+  .gauge-pct { color: #666; }
   .gauge-track { height: 10px; background: #e8ecf0; border-radius: 5px; overflow: hidden; }
   .gauge-fill { height: 100%; border-radius: 5px; background: #4a90d9; transition: width 0.3s; }
   .gauge-fill.warn { background: #f5a623; }
   .gauge-fill.over { background: #d94a68; }
-  .billing-meta { font-size: 0.8rem; color: #888; margin-top: 6px; }
-  .export-bar { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
-  .btn { display: inline-block; padding: 6px 14px; border-radius: 4px; font-size: 0.85rem; text-decoration: none; cursor: pointer; border: none; }
+  .pct-warn { color: #f5a623; font-weight: 600; }
+  .pct-over { color: #d94a68; font-weight: 600; }
+  .subsection-title { font-size: 0.9rem; color: #555; margin: 16px 0 8px; font-weight: 600; }
+
+  /* Buttons */
+  .action-bar { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
+  .btn { display: inline-block; padding: 6px 14px; border-radius: 4px; font-size: 0.85rem; text-decoration: none; cursor: pointer; border: none; font-family: inherit; }
   .btn-primary { background: #4a90d9; color: #fff; }
   .btn-primary:hover { background: #3a7bc8; }
+  .btn-sm { padding: 3px 8px; font-size: 0.78rem; }
+
+  /* Trends controls */
+  .section-controls { display: flex; gap: 16px; margin-bottom: 12px; align-items: center; font-size: 0.85rem; color: #555; flex-wrap: wrap; }
+  .section-controls label { display: flex; align-items: center; gap: 6px; }
+  .section-controls select { padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; }
+
+  /* Sessions */
+  tr.session-row:hover { background: #f0f7ff; }
+  td.session-id-cell { color: #4a90d9; cursor: pointer; }
+  td.session-id-cell:hover { text-decoration: underline; }
+  .sessions-load-more { text-align: center; padding: 12px; }
+
+  /* Modal */
+  .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 1000; overflow-y: auto; }
+  .modal-overlay.open { display: flex; align-items: flex-start; justify-content: center; padding: 40px 20px; }
+  .modal-box { background: #fff; border-radius: 8px; width: 100%; max-width: 920px; box-shadow: 0 4px 24px rgba(0,0,0,0.2); }
+  .modal-header { display: flex; justify-content: space-between; align-items: center; padding: 16px 20px; border-bottom: 1px solid #eee; }
+  .modal-header h3 { font-size: 1rem; }
+  .modal-close { font-size: 1.5rem; cursor: pointer; color: #666; line-height: 1; background: none; border: none; padding: 0 4px; }
+  .modal-body { padding: 20px; max-height: 60vh; overflow-y: auto; }
+  .modal-footer { padding: 12px 20px; border-top: 1px solid #eee; display: flex; gap: 12px; align-items: center; }
+
+  /* Trace cards */
+  .trace-card { background: #f8f9fc; border: 1px solid #e0e4ea; border-radius: 6px; padding: 12px; margin-bottom: 10px; font-size: 0.82rem; }
+  .trace-card-header { display: flex; gap: 12px; margin-bottom: 4px; flex-wrap: wrap; color: #555; }
+  .trace-card-header strong { color: #333; }
+  .trace-meta { font-size: 0.78rem; color: #999; margin-top: 2px; font-family: monospace; }
+  .trace-io { margin-top: 8px; }
+  .trace-io summary { cursor: pointer; color: #4a90d9; font-size: 0.8rem; user-select: none; }
+  .trace-io pre { margin-top: 6px; background: #fff; border: 1px solid #e0e4ea; border-radius: 4px; padding: 8px; overflow-x: auto; white-space: pre-wrap; font-size: 0.76rem; max-height: 200px; overflow-y: auto; }
+
+  /* Role visibility */
+  .role-hidden { display: none !important; }
 </style>
 </head>
 <body>
 
 <div class="header">
-  <h1>Metrics Dashboard</h1>
+  <div class="header-left">
+    <h1>AI Suite Dashboard</h1>
+    <span id="roleBadge" class="role-badge" style="display:none"></span>
+    <span id="groupLabel" style="font-size:0.85rem;color:#666"></span>
+  </div>
   <div class="header-right">
+    <div class="dev-switcher" id="devSwitcher" style="display:none">
+      <span>Dev:</span>
+      <button class="dev-btn" id="devBtnSA" title="SUPER_ADMIN">SA</button>
+      <button class="dev-btn" id="devBtnOA" title="ORG_ADMIN">OA</button>
+      <button class="dev-btn" id="devBtnU"  title="USER">U</button>
+      <button class="dev-btn" id="devBtnClear" title="Clear override" style="color:#999">✕</button>
+    </div>
     <span><span class="status-dot ok" id="statusDot"></span>Updated: <span id="lastUpdated">-</span></span>
     <label>Time window:
       <select id="timeWindow">
@@ -72,68 +156,183 @@
   </div>
 </div>
 
+<!-- KPI row -->
+<div class="kpi-row">
+  <div class="kpi-card"><div class="kpi-value" id="kpiTokens">-</div><div class="kpi-label">Total Tokens</div></div>
+  <div class="kpi-card"><div class="kpi-value" id="kpiCost">-</div><div class="kpi-label">Total Cost (USD)</div></div>
+  <div class="kpi-card"><div class="kpi-value" id="kpiRequests">-</div><div class="kpi-label">HTTP Requests</div></div>
+  <div class="kpi-card" data-roles="ORG_ADMIN USER" id="kpiSessionsCard">
+    <div class="kpi-value" id="kpiSessions">-</div><div class="kpi-label">Sessions</div>
+  </div>
+</div>
+
+<!-- Token Usage (all roles) -->
 <div class="section" id="tokenSection">
   <h2>Token Usage</h2>
   <div class="charts-row">
     <div class="chart-container"><h3>Tokens by Model</h3><canvas id="chartByModel"></canvas></div>
-    <div class="chart-container"><h3>Tokens by Group</h3><canvas id="chartByGroup"></canvas></div>
+    <div class="chart-container" data-roles="SUPER_ADMIN ORG_ADMIN"><h3>Tokens by Team</h3><canvas id="chartByGroup"></canvas></div>
   </div>
-  <table id="tokenTable">
-    <thead><tr></tr></thead>
-    <tbody></tbody>
-  </table>
+  <table id="tokenTable"><thead><tr></tr></thead><tbody></tbody></table>
 </div>
 
+<!-- LLM Cost (all roles) -->
 <div class="section" id="costSection">
   <h2>LLM Cost</h2>
   <div class="charts-row">
     <div class="chart-container"><h3>Cost by Model</h3><canvas id="chartCostByModel"></canvas></div>
     <div class="chart-container"><h3>Cost by Provider</h3><canvas id="chartCostByProvider"></canvas></div>
+    <div class="chart-container" data-roles="SUPER_ADMIN ORG_ADMIN"><h3>Cost by Team</h3><canvas id="chartCostByGroup"></canvas></div>
   </div>
-  <table id="costTable">
-    <thead><tr></tr></thead>
-    <tbody></tbody>
-  </table>
+  <table id="costTable"><thead><tr></tr></thead><tbody></tbody></table>
 </div>
 
-<div class="section" id="billingSection">
+<!-- Cost Trends (all roles) -->
+<div class="section" id="trendsSection">
+  <h2>Cost Trends</h2>
+  <div class="section-controls">
+    <label>Group by:
+      <select id="trendGroupBy">
+        <option value="group_id" selected>Team</option>
+        <option value="model">Model</option>
+      </select>
+    </label>
+  </div>
+  <div class="chart-container chart-full">
+    <canvas id="chartCostTrend"></canvas>
+    <p id="trendsUnavail" class="unavail-msg" style="display:none">
+      Cost trends require a Prometheus / Victoria Metrics backend
+    </p>
+  </div>
+</div>
+
+<!-- Billing (all roles) -->
+<div class="section" data-roles="SUPER_ADMIN ORG_ADMIN USER" id="billingSection">
   <h2>Billing &amp; Limits</h2>
-  <div class="export-bar">
-    <a id="exportLink" class="btn btn-primary" href="#" target="_blank">Download traces (JSONL)</a>
-    <span id="billingPeriod" style="line-height:2rem;font-size:0.85rem;color:#666;"></span>
+  <div class="action-bar">
+    <span id="billingPeriod" style="font-size:0.85rem;color:#666"></span>
   </div>
   <div id="billingGauges"><p class="empty-msg">Billing data not available.</p></div>
+  <div data-roles="SUPER_ADMIN ORG_ADMIN" id="usersTableWrap" style="display:none">
+    <p class="subsection-title">User Breakdown</p>
+    <table id="usersTable">
+      <thead><tr><th>User</th><th>Spent (USD)</th><th>Limit (USD)</th><th>Usage %</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
 </div>
 
-<div class="section" id="httpSection">
+<!-- Sessions (ORG_ADMIN + USER) -->
+<div class="section" data-roles="ORG_ADMIN USER" id="sessionsSection">
+  <h2>Sessions</h2>
+  <div class="action-bar">
+    <a id="discoverTracesLink" class="btn btn-primary btn-sm" href="#" target="_blank">Discover traces</a>
+    <button class="btn btn-primary btn-sm" id="sessionsRefreshBtn">Refresh</button>
+    <span id="sessionsStatus" style="font-size:0.85rem;color:#666"></span>
+  </div>
+  <table id="sessionsTable">
+    <thead>
+      <tr>
+        <th data-roles="ORG_ADMIN" id="sessionsUserCol">User</th>
+        <th>Session ID</th>
+        <th>Started</th>
+        <th>Last Event</th>
+        <th>Events</th>
+        <th>Models</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody id="sessionsBody">
+      <tr><td colspan="7" class="empty-msg">Loading sessions…</td></tr>
+    </tbody>
+  </table>
+  <div class="sessions-load-more" id="sessionsLoadMore" style="display:none">
+    <button class="btn btn-primary btn-sm" id="sessionsLoadMoreBtn">Load more</button>
+  </div>
+</div>
+
+<!-- HTTP Stats (SUPER_ADMIN only) -->
+<div class="section" data-roles="SUPER_ADMIN" id="httpSection">
   <h2>HTTP Requests</h2>
   <div class="charts-row">
     <div class="chart-container"><h3>Requests by Endpoint</h3><canvas id="chartReqByEndpoint"></canvas></div>
     <div class="chart-container"><h3>Avg Duration by Endpoint (s)</h3><canvas id="chartDurByEndpoint"></canvas></div>
   </div>
-  <table id="httpTable">
-    <thead><tr></tr></thead>
-    <tbody></tbody>
-  </table>
+  <table id="httpTable"><thead><tr></tr></thead><tbody></tbody></table>
 </div>
+
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
 (function() {
-  const API_BASE = (window.location.pathname.replace(/\/$/, '')) + '/api/metrics';
+  const BASE         = window.location.pathname.replace(/\/dashboard\/?.*$/, '/dashboard');
+  const CONFIG_API   = BASE + '/api/config';
+  const API_BASE     = BASE + '/api/metrics';
+  const BILLING_API  = BASE + '/api/billing';
+  const TRENDS_API   = BASE + '/api/trends';
+  const WHO_API      = BASE + '/api/who';
+  const SESSIONS_API = BASE + '/api/sessions';
+  const LLOGR_EXPORT  = window.location.origin + '/llogr/api/public/export';
+  const LLOGR_BROWSER = window.location.origin + '/llogr/';
   const COLORS = ['#4a90d9','#50c878','#f5a623','#d94a68','#9b59b6','#1abc9c','#e67e22','#3498db','#e74c3c','#2ecc71'];
 
   let charts = {};
   let refreshTimer = null;
   let chartsAvailable = typeof Chart !== 'undefined';
+  let currentRole = 'USER';
+  let sessionsOffset = 0;
+  const SESSIONS_LIMIT = 50;
 
   function color(i) { return COLORS[i % COLORS.length]; }
 
-  function createOrUpdateChart(canvasId, type, labels, data, label) {
+  function esc(s) {
+    const d = document.createElement('div');
+    d.textContent = String(s == null ? '' : s);
+    return d.innerHTML;
+  }
+
+  function fmtDate(s) {
+    if (!s) return '';
+    try { return new Date(s).toLocaleString(); } catch(e) { return s; }
+  }
+
+  // ── Role visibility ─────────────────────────────────────────────────────────
+
+  function applyRoleVisibility(role) {
+    document.querySelectorAll('[data-roles]').forEach(el => {
+      const allowed = el.getAttribute('data-roles').split(/[\s,]+/);
+      el.classList.toggle('role-hidden', !allowed.includes(role));
+    });
+  }
+
+  async function fetchWho() {
+    try {
+      const resp = await fetch(WHO_API);
+      if (!resp.ok) return;
+      const data = await resp.json();
+      currentRole = (data.role || 'USER').toUpperCase();
+
+      const badge = document.getElementById('roleBadge');
+      badge.textContent = currentRole.replace('_', ' ');
+      badge.className = 'role-badge ' + currentRole;
+      badge.style.display = '';
+
+      if (data.org) {
+        document.getElementById('groupLabel').textContent = '(' + data.org + ')';
+      }
+      applyRoleVisibility(currentRole);
+    } catch (e) {
+      console.warn('Who fetch error:', e);
+      applyRoleVisibility('USER');
+    }
+  }
+
+  // ── Charts ──────────────────────────────────────────────────────────────────
+
+  function createOrUpdateChart(canvasId, type, labels, data, label, extra) {
     if (!chartsAvailable) return;
     const ctx = document.getElementById(canvasId);
     if (!ctx) return;
-
     if (charts[canvasId]) {
       charts[canvasId].data.labels = labels;
       charts[canvasId].data.datasets[0].data = data;
@@ -141,46 +340,69 @@
       charts[canvasId].update();
       return;
     }
-
     charts[canvasId] = new Chart(ctx.getContext('2d'), {
-      type: type,
+      type,
       data: {
-        labels: labels,
-        datasets: [{
-          label: label,
-          data: data,
-          backgroundColor: labels.map((_, i) => color(i)),
-        }]
+        labels,
+        datasets: [{ label, data, backgroundColor: labels.map((_, i) => color(i)) }],
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
         plugins: { legend: { display: false } },
-        scales: { y: { beginAtZero: true } }
-      }
+        scales: { y: { beginAtZero: true } },
+        ...(extra || {}),
+      },
     });
   }
 
   function renderBarChart(canvasId, obj, label) {
     const keys = Object.keys(obj);
-    const vals = Object.values(obj);
-    if (keys.length === 0) {
-      if (!chartsAvailable) return;
-      const ctx = document.getElementById(canvasId);
-      if (ctx) ctx.parentElement.querySelector('h3').textContent += ' (no data)';
-      return;
-    }
-    createOrUpdateChart(canvasId, 'bar', keys, vals, label);
+    if (!keys.length) return;
+    createOrUpdateChart(canvasId, 'bar', keys, Object.values(obj), label);
   }
 
-  // Default columns per table (used when table_columns config is absent)
+  function renderTrendsChart(labels, series) {
+    if (!chartsAvailable) return;
+    const ctx = document.getElementById('chartCostTrend');
+    if (!ctx) return;
+    const datasets = series.map((s, i) => ({
+      label: s.name,
+      data: s.data,
+      borderColor: color(i),
+      backgroundColor: color(i) + '22',
+      fill: false,
+      tension: 0.3,
+      pointRadius: labels.length > 48 ? 0 : 2,
+    }));
+    if (charts['chartCostTrend']) {
+      charts['chartCostTrend'].data.labels = labels;
+      charts['chartCostTrend'].data.datasets = datasets;
+      charts['chartCostTrend'].update();
+      return;
+    }
+    charts['chartCostTrend'] = new Chart(ctx.getContext('2d'), {
+      type: 'line',
+      data: { labels, datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: series.length <= 10, position: 'bottom' } },
+        scales: {
+          x: { ticks: { maxTicksLimit: 12, maxRotation: 45 } },
+          y: { beginAtZero: true, title: { display: true, text: 'USD' } },
+        },
+      },
+    });
+  }
+
+  // ── Tables ──────────────────────────────────────────────────────────────────
+
   const DEFAULT_COLUMNS = {
-    token_usage: ['metric', 'type', 'name', 'group_id', 'model', 'value'],
-    cost: ['provider', 'model', 'group_id', 'currency', 'value'],
+    token_usage:   ['metric', 'type', 'name', 'group_id', 'model', 'value'],
+    cost:          ['provider', 'model', 'group_id', 'currency', 'value'],
     http_requests: ['method', 'endpoint', 'status_code', 'value'],
   };
-
-  // Human-readable header labels
   const COLUMN_LABELS = {
     metric: 'Metric', type: 'Type', name: 'Name', group_id: 'Group',
     model: 'Model', value: 'Value', provider: 'Provider', currency: 'Currency',
@@ -189,35 +411,27 @@
 
   function fmtCell(key, v) {
     if (key === 'value' && typeof v === 'number') return v.toLocaleString();
-    return esc(v != null ? v : '');
+    return esc(v);
   }
 
   function renderTable(tableId, entries, columns, emptyMsg) {
     const table = document.getElementById(tableId);
+    if (!table) return;
     const thead = table.querySelector('thead tr');
     const tbody = table.querySelector('tbody');
-
-    // Build header
-    thead.innerHTML = columns.map(c => `<th>${esc(COLUMN_LABELS[c] || c)}</th>`).join('');
-
+    thead.innerHTML = columns.map(c => '<th>' + esc(COLUMN_LABELS[c] || c) + '</th>').join('');
     if (!entries.length) {
-      tbody.innerHTML = `<tr><td colspan="${columns.length}" class="empty-msg">${emptyMsg}</td></tr>`;
+      tbody.innerHTML = '<tr><td colspan="' + columns.length + '" class="empty-msg">' + emptyMsg + '</td></tr>';
       return;
     }
     tbody.innerHTML = entries.map(e =>
-      '<tr>' + columns.map(c => `<td>${fmtCell(c, e[c])}</td>`).join('') + '</tr>'
+      '<tr>' + columns.map(c => '<td>' + fmtCell(c, e[c]) + '</td>').join('') + '</tr>'
     ).join('');
   }
 
-  function esc(s) {
-    const d = document.createElement('div');
-    d.textContent = String(s);
-    return d.innerHTML;
-  }
+  // ── Time helpers ─────────────────────────────────────────────────────────────
 
-  function fmt(v) { return typeof v === 'number' ? v.toLocaleString() : v; }
-
-  function buildApiUrl() {
+  function _timeParams() {
     const tw = document.getElementById('timeWindow').value;
     const params = new URLSearchParams();
     if (tw === 'custom') {
@@ -228,100 +442,133 @@
     } else if (tw === 'last_month') {
       const now = new Date();
       const start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      const end = new Date(now.getFullYear(), now.getMonth(), 1);
+      const end   = new Date(now.getFullYear(), now.getMonth(), 1);
       params.set('start', start.toISOString().slice(0, 19));
-      params.set('end', end.toISOString().slice(0, 19));
+      params.set('end',   end.toISOString().slice(0, 19));
     } else if (tw) {
       params.set('time_window', tw);
     }
-    const qs = params.toString();
-    return qs ? `${API_BASE}?${qs}` : API_BASE;
+    return { tw, params };
   }
+
+  function getStartEnd() {
+    const { tw, params } = _timeParams();
+    if (params.has('start') && params.has('end')) {
+      return { start: params.get('start'), end: params.get('end') };
+    }
+    const windows = { '1h': 3600, '1d': 86400, '7d': 604800, '30d': 2592000 };
+    const secs = windows[tw] || 86400;
+    const now = new Date();
+    return {
+      start: new Date(now - secs * 1000).toISOString().slice(0, 19),
+      end:   now.toISOString().slice(0, 19),
+    };
+  }
+
+  function buildApiUrl() {
+    const { params } = _timeParams();
+    const qs = params.toString();
+    return qs ? API_BASE + '?' + qs : API_BASE;
+  }
+
+  function buildTrendsUrl() {
+    const { tw, params } = _timeParams();
+    if (tw !== 'last_month' && tw !== 'custom') {
+      params.delete('time_window');
+      params.set('time_window', tw || '1d');
+    }
+    params.set('group_by', document.getElementById('trendGroupBy').value);
+    return TRENDS_API + '?' + params;
+  }
+
+  function buildExportUrl(sessionId) {
+    const { start, end } = getStartEnd();
+    const p = new URLSearchParams({ start, end });
+    if (sessionId) p.set('session_id', sessionId);
+    return LLOGR_EXPORT + '?' + p;
+  }
+
+  function buildLlogrUrl(sessionId, start, end) {
+    if (!start || !end) {
+      const range = getStartEnd();
+      start = range.start;
+      end = range.end;
+    }
+    const p = new URLSearchParams({ start, end });
+    if (sessionId) p.set('session_id', sessionId);
+    return LLOGR_BROWSER + '?' + p;
+  }
+
+  // ── Metrics ──────────────────────────────────────────────────────────────────
 
   async function fetchAndRender() {
     try {
       const resp = await fetch(buildApiUrl());
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
       const data = await resp.json();
 
       document.getElementById('lastUpdated').textContent = new Date(data.timestamp).toLocaleTimeString();
       document.getElementById('statusDot').className = 'status-dot ok';
 
       const s = data.summary || {};
-      renderBarChart('chartByModel', s.tokens_by_model || {}, 'Tokens');
-      renderBarChart('chartByGroup', s.tokens_by_group || {}, 'Tokens');
-      renderBarChart('chartCostByModel', s.cost_by_model || {}, 'Cost');
-      renderBarChart('chartCostByProvider', s.cost_by_provider || {}, 'Cost');
-      renderBarChart('chartReqByEndpoint', s.requests_by_endpoint || {}, 'Requests');
-      renderBarChart('chartDurByEndpoint', s.avg_duration_by_endpoint || {}, 'Avg Duration (s)');
+      const totalTokens = Object.values(s.tokens_by_model || {}).reduce((a, b) => a + b, 0);
+      const totalCost   = Object.values(s.cost_by_model   || {}).reduce((a, b) => a + b, 0);
+      const totalReqs   = Object.values(s.requests_by_endpoint || {}).reduce((a, b) => a + b, 0);
+      document.getElementById('kpiTokens').textContent   = totalTokens > 1e6 ? (totalTokens / 1e6).toFixed(1) + 'M' : totalTokens.toLocaleString();
+      document.getElementById('kpiCost').textContent     = '$' + totalCost.toFixed(4);
+      document.getElementById('kpiRequests').textContent = totalReqs.toLocaleString();
+
+      renderBarChart('chartByModel',        s.tokens_by_model          || {}, 'Tokens');
+      renderBarChart('chartByGroup',        s.tokens_by_group          || {}, 'Tokens');
+      renderBarChart('chartCostByModel',    s.cost_by_model            || {}, 'Cost');
+      renderBarChart('chartCostByProvider', s.cost_by_provider         || {}, 'Cost');
+      renderBarChart('chartCostByGroup',    s.cost_by_group            || {}, 'Cost');
+      renderBarChart('chartReqByEndpoint',  s.requests_by_endpoint     || {}, 'Requests');
+      renderBarChart('chartDurByEndpoint',  s.avg_duration_by_endpoint || {}, 'Avg Duration (s)');
 
       const cols = data.table_columns || {};
-      renderTable('tokenTable', data.token_usage || [], cols.token_usage || DEFAULT_COLUMNS.token_usage, 'No token usage data yet');
-      renderTable('costTable', data.cost || [], cols.cost || DEFAULT_COLUMNS.cost, 'No cost data yet');
-      renderTable('httpTable', data.http_requests || [], cols.http_requests || DEFAULT_COLUMNS.http_requests, 'No HTTP request data yet');
-    } catch (err) {
-      console.error('Dashboard fetch error:', err);
+      renderTable('tokenTable', data.token_usage   || [], cols.token_usage   || DEFAULT_COLUMNS.token_usage,   'No token usage data yet');
+      renderTable('costTable',  data.cost          || [], cols.cost          || DEFAULT_COLUMNS.cost,          'No cost data yet');
+      renderTable('httpTable',  data.http_requests || [], cols.http_requests || DEFAULT_COLUMNS.http_requests, 'No HTTP request data yet');
+    } catch (e) {
+      console.error('Metrics fetch error:', e);
       document.getElementById('statusDot').className = 'status-dot stale';
     }
   }
 
-  function setupRefresh() {
-    const sel = document.getElementById('refreshInterval');
-    sel.addEventListener('change', function() {
-      if (refreshTimer) clearInterval(refreshTimer);
-      const ms = parseInt(this.value, 10);
-      if (ms > 0) refreshTimer = setInterval(fetchAndRender, ms);
-    });
-    // Start default interval
-    const ms = parseInt(sel.value, 10);
-    if (ms > 0) refreshTimer = setInterval(fetchAndRender, ms);
-  }
+  // ── Trends ───────────────────────────────────────────────────────────────────
 
-  // Time window controls
-  const twSel = document.getElementById('timeWindow');
-  const customRange = document.getElementById('customRange');
-  twSel.addEventListener('change', function() {
-    customRange.style.display = this.value === 'custom' ? '' : 'none';
-    fetchAndRender();
-  });
-  document.getElementById('rangeStart').addEventListener('change', fetchAndRender);
-  document.getElementById('rangeEnd').addEventListener('change', fetchAndRender);
-
-  fetchAndRender();
-  setupRefresh();
-
-  // ── Billing section ──────────────────────────────────────────────────────
-  const BILLING_API = (window.location.pathname.replace(/\/$/, '')) + '/api/billing';
-  const LLOGR_EXPORT = window.location.origin + '/llogr/api/public/export';
-
-  function renderGauge(label, spent, limit, pct, alert) {
-    const cls = pct >= 100 ? 'over' : (alert ? 'warn' : '');
-    return `<div class="gauge-row">
-      <div class="gauge-label">
-        <span>${esc(label)}</span>
-        <span class="gauge-pct">${spent.toFixed(4)} / ${limit.toFixed(2)} USD &nbsp; ${pct.toFixed(1)}%</span>
-      </div>
-      <div class="gauge-track"><div class="gauge-fill ${cls}" style="width:${Math.min(pct,100)}%"></div></div>
-    </div>`;
-  }
-
-  function buildExportUrl(period) {
-    // period = "2026-05" (monthly) or "2026-W21" (weekly)
-    const now = new Date();
-    let start;
-    if (/^\d{4}-W\d+$/.test(period)) {
-      // weekly: start of current ISO week
-      const d = new Date(now);
-      d.setDate(d.getDate() - d.getDay() + 1);
-      d.setHours(0, 0, 0, 0);
-      start = d.toISOString().slice(0, 19);
-    } else {
-      // monthly
-      const [y, m] = period.split('-');
-      start = `${y}-${m}-01T00:00:00`;
+  async function fetchAndRenderTrends() {
+    try {
+      const resp = await fetch(buildTrendsUrl());
+      if (!resp.ok) return;
+      const data = await resp.json();
+      const unavailEl = document.getElementById('trendsUnavail');
+      if (!data.available || !data.labels || !data.labels.length) {
+        unavailEl.textContent = !data.available
+          ? 'Cost trends require a Prometheus / Victoria Metrics backend'
+          : 'No cost data in this time range.';
+        unavailEl.style.display = '';
+        return;
+      }
+      unavailEl.style.display = 'none';
+      renderTrendsChart(data.labels, data.series || []);
+    } catch (e) {
+      console.warn('Trends fetch error:', e);
     }
-    const end = now.toISOString().slice(0, 19);
-    return `${LLOGR_EXPORT}?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`;
+  }
+
+  // ── Billing ──────────────────────────────────────────────────────────────────
+
+  function renderGauge(label, spent, limit, pct, isAlert) {
+    const cls = pct >= 100 ? 'over' : (isAlert ? 'warn' : '');
+    return '<div class="gauge-row">' +
+      '<div class="gauge-label">' +
+        '<span>' + esc(label) + '</span>' +
+        '<span class="gauge-pct">' + spent.toFixed(4) + ' / ' + limit.toFixed(2) + ' USD &nbsp; ' + pct.toFixed(1) + '%</span>' +
+      '</div>' +
+      '<div class="gauge-track"><div class="gauge-fill ' + cls + '" style="width:' + Math.min(pct, 100) + '%"></div></div>' +
+    '</div>';
   }
 
   async function fetchAndRenderBilling() {
@@ -331,32 +578,206 @@
       const data = await resp.json();
       if (!data || data.enabled === false) return;
 
-      const gaugesEl = document.getElementById('billingGauges');
-      const periodEl = document.getElementById('billingPeriod');
-      const exportLink = document.getElementById('exportLink');
-
-      periodEl.textContent = `Period: ${data.period || ''}`;
-      exportLink.href = buildExportUrl(data.period || '');
+      document.getElementById('billingPeriod').textContent = 'Period: ' + (data.period || '');
+      document.getElementById('discoverTracesLink').href = buildLlogrUrl(null);
 
       let html = '';
       (data.groups || []).forEach(g => {
-        html += renderGauge(`Group: ${g.org}`, g.group_spent, g.group_limit, g.group_pct, g.alert);
+        html += renderGauge('Group: ' + g.org, g.group_spent, g.group_limit, g.group_pct, g.alert);
       });
       if (data.user) {
         const u = data.user;
-        const uPct = u.user_pct || 0;
-        html += renderGauge(`User: ${u.group_id}`, u.user_spent, u.user_limit, uPct, uPct >= 80);
+        const pct = u.user_pct || 0;
+        html += renderGauge('User: ' + u.group_id, u.user_spent, u.user_limit, pct, pct >= 80);
       }
-      gaugesEl.innerHTML = html || '<p class="empty-msg">No billing data for this period.</p>';
-    } catch (err) {
-      console.warn('Billing fetch error:', err);
+      document.getElementById('billingGauges').innerHTML = html || '<p class="empty-msg">No billing data for this period.</p>';
+
+      const usersWrap = document.getElementById('usersTableWrap');
+      if ((currentRole === 'ORG_ADMIN' || currentRole === 'SUPER_ADMIN') && usersWrap) {
+        const users = data.users || [];
+        if (users.length) {
+          usersWrap.style.display = '';
+          document.querySelector('#usersTable tbody').innerHTML = users.map(u => {
+            const cls = u.user_pct >= 100 ? 'pct-over' : (u.user_pct >= 80 ? 'pct-warn' : '');
+            return '<tr><td>' + esc(u.group_id) + '</td><td>' + u.user_spent.toFixed(4) + '</td><td>' +
+              u.user_limit.toFixed(2) + '</td><td class="' + cls + '">' + u.user_pct.toFixed(1) + '%</td></tr>';
+          }).join('');
+        } else {
+          usersWrap.style.display = 'none';
+        }
+      }
+    } catch (e) {
+      console.warn('Billing fetch error:', e);
     }
   }
 
-  fetchAndRenderBilling();
-  // Re-fetch billing on same refresh cycle
-  const origFetch = fetchAndRender;
-  window._billingRefresh = setInterval(fetchAndRenderBilling, 30000);
+  // ── Sessions ─────────────────────────────────────────────────────────────────
+
+  async function loadSessions(append) {
+    if (currentRole === 'SUPER_ADMIN') return;
+    if (!append) sessionsOffset = 0;
+
+    const { start, end } = getStartEnd();
+    const params = new URLSearchParams({ start, end, limit: SESSIONS_LIMIT, offset: sessionsOffset });
+    const statusEl = document.getElementById('sessionsStatus');
+    statusEl.textContent = 'Loading…';
+
+    try {
+      const resp = await fetch(SESSIONS_API + '?' + params);
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      const data = await resp.json();
+      const sessions = data.sessions || [];
+      const showUserCol = currentRole === 'ORG_ADMIN';
+      const colCount = showUserCol ? 7 : 6;
+      const tbody = document.getElementById('sessionsBody');
+
+      if (!append) tbody.innerHTML = '';
+
+      statusEl.textContent = '';
+
+      if (sessions.length === 0 && sessionsOffset === 0) {
+        tbody.innerHTML = '<tr><td colspan="' + colCount + '" class="empty-msg">No sessions in this time range.</td></tr>';
+        document.getElementById('sessionsLoadMore').style.display = 'none';
+        document.getElementById('kpiSessions').textContent = '0';
+        return;
+      }
+
+      sessions.forEach(function(s) {
+        const models = Array.isArray(s.models) ? s.models.filter(Boolean).join(', ') : (s.models || '');
+        const sid = s.session_id || '';
+        const tr = document.createElement('tr');
+        tr.className = 'session-row';
+        let cells = '';
+        if (showUserCol) cells += '<td>' + esc(s.project_id || '') + '</td>';
+        cells += '<td class="session-id-cell">' + esc(sid) + '</td>';
+        cells += '<td>' + esc(fmtDate(s.started_at)) + '</td>';
+        cells += '<td>' + esc(fmtDate(s.last_event_at)) + '</td>';
+        cells += '<td>' + esc(s.event_count) + '</td>';
+        cells += '<td>' + esc(models) + '</td>';
+        cells += '<td><button class="btn btn-primary btn-sm">Export</button></td>';
+        tr.innerHTML = cells;
+        tr.querySelector('.session-id-cell').addEventListener('click', function() { window.open(buildLlogrUrl(sid, s.started_at, s.last_event_at), '_blank'); });
+        tr.querySelector('button').addEventListener('click', function() { exportSession(sid); });
+        tbody.appendChild(tr);
+      });
+
+      sessionsOffset += sessions.length;
+      document.getElementById('sessionsLoadMore').style.display =
+        sessions.length === SESSIONS_LIMIT ? '' : 'none';
+
+      if (!append) {
+        document.getElementById('kpiSessions').textContent =
+          sessions.length === SESSIONS_LIMIT ? sessionsOffset + '+' : String(sessionsOffset);
+      }
+    } catch (e) {
+      console.warn('Sessions fetch error:', e);
+      document.getElementById('sessionsStatus').textContent = 'Error loading sessions.';
+    }
+  }
+
+  async function exportSession(sessionId) {
+    const url = buildExportUrl(sessionId);
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      const text = await resp.text();
+      const blob = new Blob([text], { type: 'application/x-ndjson' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'session-' + sessionId + '.jsonl';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(a.href);
+    } catch (e) {
+      alert('Export failed: ' + e.message);
+    }
+  }
+
+  document.getElementById('sessionsRefreshBtn').addEventListener('click', function() { loadSessions(false); });
+  document.getElementById('sessionsLoadMoreBtn').addEventListener('click', function() { loadSessions(true); });
+
+  // ── Main ──────────────────────────────────────────────────────────────────────
+
+  function fetchAll() {
+    fetchAndRender();
+    fetchAndRenderTrends();
+    fetchAndRenderBilling();
+    loadSessions(false);
+  }
+
+  function setupRefresh() {
+    const sel = document.getElementById('refreshInterval');
+    sel.addEventListener('change', function() {
+      if (refreshTimer) clearInterval(refreshTimer);
+      const ms = parseInt(this.value, 10);
+      if (ms > 0) refreshTimer = setInterval(fetchAll, ms);
+    });
+    const ms = parseInt(sel.value, 10);
+    if (ms > 0) refreshTimer = setInterval(fetchAll, ms);
+  }
+
+  document.getElementById('timeWindow').addEventListener('change', function() {
+    document.getElementById('customRange').style.display = this.value === 'custom' ? '' : 'none';
+    fetchAll();
+  });
+  document.getElementById('rangeStart').addEventListener('change', fetchAll);
+  document.getElementById('rangeEnd').addEventListener('change', fetchAll);
+  document.getElementById('trendGroupBy').addEventListener('change', fetchAndRenderTrends);
+
+  // ── Dev role switcher ─────────────────────────────────────────────────────────
+
+  const DEV_GROUPS = {
+    SUPER_ADMIN: 'lf-pk-ai-suite',
+    ORG_ADMIN:   'unknown/anonymous',
+    USER:        'unknown/anonymous',
+  };
+
+  function getCookie(name) {
+    const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+    return m ? decodeURIComponent(m[2]) : '';
+  }
+
+  function setCookie(name, value, days) {
+    const exp = days ? '; max-age=' + (days * 86400) : '; max-age=0';
+    document.cookie = name + '=' + encodeURIComponent(value) + '; path=/' + exp;
+  }
+
+  async function initDevSwitcher() {
+    try {
+      const resp = await fetch(CONFIG_API);
+      if (!resp.ok) return;
+      const cfg = await resp.json();
+      if (!cfg.dev_switcher) return;
+    } catch(e) { return; }
+
+    const el = document.getElementById('devSwitcher');
+    el.style.display = '';
+
+    const active = getCookie('dev_role');
+    document.getElementById('devBtnSA').classList.toggle('active', active === 'SUPER_ADMIN');
+    document.getElementById('devBtnOA').classList.toggle('active', active === 'ORG_ADMIN');
+    document.getElementById('devBtnU').classList.toggle('active',  active === 'USER');
+
+    document.getElementById('devBtnSA').addEventListener('click', function() { applyDevRole('SUPER_ADMIN'); });
+    document.getElementById('devBtnOA').addEventListener('click', function() { applyDevRole('ORG_ADMIN'); });
+    document.getElementById('devBtnU').addEventListener('click',  function() { applyDevRole('USER'); });
+    document.getElementById('devBtnClear').addEventListener('click', function() {
+      setCookie('dev_role', '', 0);
+      setCookie('dev_group', '', 0);
+      location.reload();
+    });
+  }
+
+  function applyDevRole(role) {
+    setCookie('dev_role',  role,             1);
+    setCookie('dev_group', DEV_GROUPS[role], 1);
+    location.reload();
+  }
+
+  initDevSwitcher();
+  fetchWho().then(fetchAll);
+  setupRefresh();
 })();
 </script>
 </body>

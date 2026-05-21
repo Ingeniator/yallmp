@@ -420,6 +420,7 @@ def _emit_completions_metrics(
         is_streaming=False,
         cost=cost,
         session_id=request.headers.get("x-session-id"),
+        trace_id=request.headers.get("x-request-id"),
     )
 
     if cost and settings.billing_enabled:
@@ -693,6 +694,7 @@ def _emit_streaming_metrics(
                 is_streaming=True,
                 cost=cost,
                 session_id=request.headers.get("x-session-id"),
+                trace_id=request.headers.get("x-request-id"),
             )
 
             if cost and settings.billing_enabled:
