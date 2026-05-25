@@ -15,7 +15,7 @@ Every trace should store: **prompts, tools, retrieved docs, outputs, latency, co
 | 4 | outputs         | ✅ Fixed (streaming) / ⚠️ Conditional (tracing_log_io gate) |
 | 5 | latency         | ✅ Fixed       |
 | 6 | cost            | ⚠️ Conditional |
-| 7 | user feedback   | ❌ Missing     |
+| 7 | user feedback   | ✅ Fixed       |
 
 ---
 
@@ -87,17 +87,18 @@ across all providers). Log a warning when cost cannot be resolved so misconfigur
 
 ---
 
-### 7. User Feedback — ❌ Missing
-No feedback mechanism exists anywhere in the codebase:
-- No `POST /v1/feedback` endpoint.
-- No `submit_feedback` / `score` method on `LangfuseEmitter`.
-- No call to `langfuse.score(...)` at any point.
+### 7. User Feedback — ✅ Fixed
 
-**Fix:**
-1. Add a `score(trace_id, name, value, comment)` method to `LangfuseEmitter`
-   (calls `client.score(...)`).
-2. Expose a `POST /v1/feedback` endpoint that accepts `{ trace_id, score, comment }`
-   and calls the emitter's `score` method.
+**`POST /v1/feedback`** accepts `{ request_id, score, name?, comment? }` and attaches a score
+to the corresponding Langfuse trace. Group isolation is preserved via `X-Group-ID`.
+
+Trace linkage is stateless: the Langfuse `trace_id` is derived from `request_id` with
+`Langfuse.create_trace_id(seed=request_id)` — the same formula used when the original request
+was traced — so no mapping needs to be stored between request and feedback.
+
+`LangfuseEmitter.score()` POSTs directly to `/api/public/scores` via `httpx.AsyncClient`
+(the OTEL-based Langfuse v3 SDK has no `score` method; the HTTP API is authoritative).
+Returns 503 when `tracing_enabled=False`.
 
 ---
 

@@ -405,6 +405,30 @@ def create_app() -> FastAPI:
             # Legacy single-provider path
             return await proxy_request_with_retries(app.state.client, full_path, request, custom_headers, pricing_cache=app.state.pricing_cache)
 
+    from app.schemas.feedback import FeedbackRequest, FeedbackResponse
+    from app.services.tracing import score_trace
+
+    @app.post("/v1/feedback", response_model=FeedbackResponse)
+    async def submit_feedback(body: FeedbackRequest, request: Request):
+        """Attach user feedback to a previous LLM request trace.
+
+        Pass the same X-Request-ID (and X-Group-ID) that were sent with the
+        original LLM call. The trace_id is derived deterministically so no
+        server-side state is required between the request and the feedback.
+        """
+        if not settings.tracing_enabled:
+            return JSONResponse(status_code=503, content={"detail": "tracing is disabled"})
+
+        group_id = request.headers.get("x-group-id", "unknown")
+        trace_id = await score_trace(
+            request_id=body.request_id,
+            name=body.name,
+            value=body.score,
+            comment=body.comment,
+            group_id=group_id,
+        )
+        return FeedbackResponse(status="ok", trace_id=trace_id)
+
     if settings.prompt_hub_enabled:
         from app.services.prompt_manager import get_prompt_store
         from app.schemas.prompt import PromptVariables as _PromptVars

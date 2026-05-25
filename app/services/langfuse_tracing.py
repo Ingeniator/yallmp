@@ -125,6 +125,32 @@ class LangfuseEmitter:
             ):
                 pass
 
+    async def score(
+        self,
+        trace_id: str,
+        name: str,
+        value: float,
+        comment: str | None,
+        group_id: str,
+    ) -> None:
+        """Post a score to Langfuse via the HTTP API (OTEL SDK has no score method)."""
+        import httpx
+
+        pk = group_id if group_id and group_id != "unknown" else self._public_key
+        sk = group_id if group_id and group_id != "unknown" else self._secret_key
+
+        payload: dict = {"traceId": trace_id, "name": name, "value": value}
+        if comment:
+            payload["comment"] = comment
+
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                f"{self._host.rstrip('/')}/api/public/scores",
+                json=payload,
+                auth=(pk, sk),
+            )
+            resp.raise_for_status()
+
     def get_langchain_callback(self, trace_name: str, metadata: dict) -> object | None:
         try:
             from langfuse.langchain import CallbackHandler

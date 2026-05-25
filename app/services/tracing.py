@@ -28,6 +28,15 @@ class TraceEmitter(Protocol):
         trace_id: str | None = None,
     ) -> None: ...
 
+    async def score(
+        self,
+        trace_id: str,
+        name: str,
+        value: float,
+        comment: str | None,
+        group_id: str,
+    ) -> None: ...
+
     def get_langchain_callback(self, trace_name: str, metadata: dict) -> object | None: ...
 
     def shutdown(self) -> None: ...
@@ -90,6 +99,36 @@ def trace_proxy_request(
         )
     except Exception as e:
         logger.error("Error in trace_proxy_request", exc_info=e)
+
+
+async def score_trace(
+    request_id: str,
+    name: str,
+    value: float,
+    comment: str | None,
+    group_id: str,
+) -> str:
+    """Attach a user feedback score to the trace created for request_id.
+
+    Derives the Langfuse trace_id from request_id using the same seed formula
+    as the proxy, so no state needs to be stored between request and feedback.
+    Returns the derived trace_id (empty string when tracing is disabled).
+    """
+    emitter = get_emitter()
+    if emitter is None:
+        logger.debug("score_trace skipped: emitter is None")
+        return ""
+
+    from langfuse import Langfuse
+    trace_id = Langfuse.create_trace_id(seed=request_id)
+
+    logger.debug("score_trace", request_id=request_id, trace_id=trace_id, name=name, value=value, group_id=group_id)
+    try:
+        await emitter.score(trace_id=trace_id, name=name, value=value, comment=comment, group_id=group_id)
+    except Exception as e:
+        logger.error("Error in score_trace", exc_info=e)
+
+    return trace_id
 
 
 def shutdown() -> None:
