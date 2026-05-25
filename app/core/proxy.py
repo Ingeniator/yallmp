@@ -617,6 +617,57 @@ async def _handle_streaming_request(
     )
 
 
+def _assemble_streaming_output(full_text: str, last_payload: dict) -> dict:
+    """Build a synthetic completion-style dict from accumulated SSE chunks.
+
+    Walks every ``data:`` line, accumulates ``choices[n].delta.content`` per
+    choice index, and returns a dict shaped like a non-streaming response so
+    the trace output contains the full assistant reply rather than only the
+    final (usually empty) usage chunk.
+
+    ``id``, ``model``, and ``usage`` are taken from *last_payload*.
+    """
+    choices: dict[int, dict] = {}
+
+    for line in full_text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("data:") or stripped == "data: [DONE]":
+            continue
+        try:
+            payload = json.loads(stripped[len("data:"):].strip())
+        except (json.JSONDecodeError, ValueError):
+            continue
+
+        for choice in payload.get("choices", []):
+            idx = choice.get("index", 0)
+            delta = choice.get("delta", {})
+            if idx not in choices:
+                choices[idx] = {"role": "assistant", "content": "", "finish_reason": None}
+            if delta.get("role"):
+                choices[idx]["role"] = delta["role"]
+            if delta.get("content"):
+                choices[idx]["content"] += delta["content"]
+            if choice.get("finish_reason"):
+                choices[idx]["finish_reason"] = choice["finish_reason"]
+
+    assembled_choices = [
+        {
+            "index": idx,
+            "message": {"role": data["role"], "content": data["content"]},
+            "finish_reason": data["finish_reason"],
+        }
+        for idx, data in sorted(choices.items())
+    ]
+
+    return {
+        "id": last_payload.get("id", ""),
+        "object": "chat.completion",
+        "model": last_payload.get("model", ""),
+        "choices": assembled_choices,
+        "usage": last_payload.get("usage"),
+    }
+
+
 def _emit_streaming_metrics(
     chunks: list[str],
     request: Request,
@@ -686,7 +737,7 @@ def _emit_streaming_metrics(
                 model=last_payload.get("model", ""),
                 provider=pfx,
                 input_body=input_body,
-                output_body=last_payload,
+                output_body=_assemble_streaming_output(full_text, last_payload),
                 status_code=200,
                 usage=last_payload.get("usage"),
                 duration_ms=duration_ms,

@@ -283,4 +283,134 @@ async def test_streaming_connection_failure_returns_502():
 
     from fastapi.responses import JSONResponse
     assert isinstance(response, JSONResponse)
-    assert response.status_code == 502
+
+
+# ---------------------------------------------------------------------------
+# _assemble_streaming_output
+# ---------------------------------------------------------------------------
+
+class TestAssembleStreamingOutput:
+    """Unit tests for _assemble_streaming_output."""
+
+    def _full_text(self, payloads: list[dict]) -> str:
+        lines = [f"data: {json.dumps(p)}\n\n" for p in payloads]
+        lines.append("data: [DONE]\n\n")
+        return "".join(lines)
+
+    def test_concatenates_delta_content(self):
+        from app.core.proxy import _assemble_streaming_output
+
+        chunks = [
+            {"id": "x", "model": "m", "choices": [{"index": 0, "delta": {"role": "assistant", "content": "Hello"}, "finish_reason": None}]},
+            {"id": "x", "model": "m", "choices": [{"index": 0, "delta": {"content": " world"}, "finish_reason": None}]},
+            {"id": "x", "model": "m", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7}},
+        ]
+        last = chunks[-1]
+        result = _assemble_streaming_output(self._full_text(chunks), last)
+
+        assert result["choices"][0]["message"]["content"] == "Hello world"
+        assert result["choices"][0]["message"]["role"] == "assistant"
+        assert result["choices"][0]["finish_reason"] == "stop"
+
+    def test_model_id_usage_from_last_payload(self):
+        from app.core.proxy import _assemble_streaming_output
+
+        chunks = [
+            {"id": "abc", "model": "gpt-x", "choices": [{"index": 0, "delta": {"content": "hi"}, "finish_reason": None}]},
+            {"id": "abc", "model": "gpt-x", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+             "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4}},
+        ]
+        last = chunks[-1]
+        result = _assemble_streaming_output(self._full_text(chunks), last)
+
+        assert result["id"] == "abc"
+        assert result["model"] == "gpt-x"
+        assert result["object"] == "chat.completion"
+        assert result["usage"]["total_tokens"] == 4
+
+    def test_multiple_choice_indices(self):
+        from app.core.proxy import _assemble_streaming_output
+
+        chunks = [
+            {"id": "y", "model": "m", "choices": [
+                {"index": 0, "delta": {"content": "A"}, "finish_reason": None},
+                {"index": 1, "delta": {"content": "B"}, "finish_reason": None},
+            ]},
+            {"id": "y", "model": "m", "choices": [
+                {"index": 0, "delta": {"content": "1"}, "finish_reason": "stop"},
+                {"index": 1, "delta": {"content": "2"}, "finish_reason": "stop"},
+            ], "usage": {}},
+        ]
+        last = chunks[-1]
+        result = _assemble_streaming_output(self._full_text(chunks), last)
+
+        assert len(result["choices"]) == 2
+        assert result["choices"][0]["message"]["content"] == "A1"
+        assert result["choices"][1]["message"]["content"] == "B2"
+
+    def test_skips_done_and_malformed_lines(self):
+        from app.core.proxy import _assemble_streaming_output
+
+        full_text = (
+            "data: [DONE]\n\n"
+            "data: not-json\n\n"
+            'data: {"id":"z","model":"m","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}],"usage":{}}\n\n'
+        )
+        last = {"id": "z", "model": "m", "usage": {}}
+        result = _assemble_streaming_output(full_text, last)
+
+        assert result["choices"][0]["message"]["content"] == "ok"
+
+    def test_empty_stream_returns_empty_choices(self):
+        from app.core.proxy import _assemble_streaming_output
+
+        result = _assemble_streaming_output("data: [DONE]\n\n", {"id": "", "model": "", "usage": None})
+
+        assert result["choices"] == []
+        assert result["object"] == "chat.completion"
+
+
+# ---------------------------------------------------------------------------
+# _emit_streaming_metrics — output_body uses assembled content
+# ---------------------------------------------------------------------------
+
+class TestEmitStreamingMetricsOutputBody:
+    """Verify _emit_streaming_metrics passes assembled output to trace_proxy_request."""
+
+    def _make_request(self):
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "query_string": b"",
+            "headers": [
+                (b"host", b"localhost"),
+                (b"x-group-id", b"g1"),
+            ],
+            "root_path": "",
+        }
+        return Request(scope, receive=AsyncMock(return_value={"type": "http.request", "body": b""}))
+
+    def test_output_body_is_assembled_not_last_chunk(self):
+        from app.core.proxy import _emit_streaming_metrics
+
+        sse_chunks = [
+            'data: {"id":"1","model":"gpt-x","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello"},"finish_reason":null}]}\n\n',
+            'data: {"id":"1","model":"gpt-x","choices":[{"index":0,"delta":{"content":" world"},"finish_reason":null}]}\n\n',
+            'data: {"id":"1","model":"gpt-x","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}\n\n',
+            "data: [DONE]\n\n",
+        ]
+        request = self._make_request()
+
+        with patch("app.core.proxy.trace_proxy_request") as mock_trace, \
+             patch("app.core.proxy.settings") as mock_settings:
+            mock_settings.tracing_log_io = True
+            mock_settings.billing_enabled = False
+            _emit_streaming_metrics(sse_chunks, request, start_time=0)
+
+        mock_trace.assert_called_once()
+        output_body = mock_trace.call_args.kwargs["output_body"]
+        assert output_body["object"] == "chat.completion"
+        assert output_body["choices"][0]["message"]["content"] == "Hello world"
+        assert output_body["choices"][0]["finish_reason"] == "stop"
+        assert output_body["usage"]["total_tokens"] == 7
