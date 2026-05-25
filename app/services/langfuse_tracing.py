@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from datetime import datetime, timedelta, timezone
 
 from langfuse import Langfuse, propagate_attributes
 
@@ -105,6 +106,9 @@ class LangfuseEmitter:
         valid_trace_id = Langfuse.create_trace_id(seed=trace_id) if trace_id else None
         trace_context = {"trace_id": valid_trace_id} if valid_trace_id else None
 
+        end_time = datetime.now(timezone.utc)
+        start_time = end_time - timedelta(milliseconds=duration_ms)
+
         with propagate_attributes(session_id=session_id or None):
             with client.start_as_current_observation(
                 name=trace_name,
@@ -116,6 +120,8 @@ class LangfuseEmitter:
                 usage_details=usage_details or None,
                 cost_details=cost_details,
                 trace_context=trace_context,
+                start_time=start_time,
+                end_time=end_time,
             ):
                 pass
 

@@ -13,7 +13,7 @@ Every trace should store: **prompts, tools, retrieved docs, outputs, latency, co
 | 2 | tools           | ❌ Missing     |
 | 3 | retrieved docs  | ❌ Missing     |
 | 4 | outputs         | ✅ Fixed (streaming) / ⚠️ Conditional (tracing_log_io gate) |
-| 5 | latency         | ⚠️ Partial     |
+| 5 | latency         | ✅ Fixed       |
 | 6 | cost            | ⚠️ Conditional |
 | 7 | user feedback   | ❌ Missing     |
 
@@ -68,14 +68,12 @@ Remaining issue:
 
 ---
 
-### 5. Latency — ⚠️ Partial
-`duration_ms` is computed correctly and stored in `metadata["duration_ms"]`.
-However, the Langfuse observation is created with `with client.start_as_current_observation(...): pass` —
-the span's own `start_time`/`end_time` record ~0 ms because the context manager body is empty.
-Langfuse's native timeline view will show the generation as instantaneous.
+### 5. Latency — ✅ Fixed
 
-**Fix:** Pass `start_time` and `end_time` (or `completion_start_time`) directly to
-`start_as_current_observation` so the span duration matches the real request latency.
+`end_time = datetime.now(timezone.utc)` and `start_time = end_time - timedelta(milliseconds=duration_ms)`
+are now computed in `LangfuseEmitter.trace_proxy_request` and passed directly to
+`start_as_current_observation`. The Langfuse timeline view now reflects the real request latency.
+`duration_ms` is still stored in `metadata["duration_ms"]` for raw querying.
 
 ---
 
