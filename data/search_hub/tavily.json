@@ -1,0 +1,19 @@
+{
+  "name": "tavily",
+  "type": "tavily",
+  "base_url": "https://api.tavily.com",
+  "auth": {
+    "type": "APIKEY",
+    "api_key": "${TAVILY_API_KEY}"
+  },
+  "default": true,
+  "cost_per_search": 0.001,
+  "timeout": {
+    "connect": 10,
+    "read": 30,
+    "write": 10
+  },
+  "failure_threshold": 5,
+  "recovery_time": 30,
+  "window_size": 60
+}

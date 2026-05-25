@@ -37,6 +37,19 @@ class TraceEmitter(Protocol):
         group_id: str,
     ) -> None: ...
 
+    def trace_search_request(
+        self,
+        provider: str,
+        query: str,
+        num_results: int,
+        result_count: int,
+        status_code: int,
+        duration_ms: float,
+        group_id: str,
+        cost: float | None,
+        trace_id: str | None,
+    ) -> None: ...
+
     def get_langchain_callback(self, trace_name: str, metadata: dict) -> object | None: ...
 
     def shutdown(self) -> None: ...
@@ -129,6 +142,46 @@ async def score_trace(
         logger.error("Error in score_trace", exc_info=e)
 
     return trace_id
+
+
+def trace_search_request(
+    provider: str,
+    query: str,
+    num_results: int,
+    result_count: int,
+    status_code: int,
+    duration_ms: float,
+    group_id: str,
+    cost: float | None = None,
+    trace_id: str | None = None,
+) -> None:
+    """Convenience wrapper — emit a search request trace via the configured emitter."""
+    emitter = get_emitter()
+    if emitter is None:
+        logger.debug("trace_search_request skipped: emitter is None")
+        return
+    logger.debug(
+        "trace_search_request",
+        provider=provider,
+        query=query,
+        result_count=result_count,
+        group_id=group_id,
+        cost=cost,
+    )
+    try:
+        emitter.trace_search_request(
+            provider=provider,
+            query=query,
+            num_results=num_results,
+            result_count=result_count,
+            status_code=status_code,
+            duration_ms=duration_ms,
+            group_id=group_id,
+            cost=cost,
+            trace_id=trace_id,
+        )
+    except Exception as e:
+        logger.error("Error in trace_search_request", exc_info=e)
 
 
 def shutdown() -> None:

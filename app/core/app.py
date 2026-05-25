@@ -54,6 +54,16 @@ async def lifespan(app: FastAPI):
 
     app.state.pricing_cache = pricing_cache
 
+    # Initialize Search Hub if enabled
+    search_hub = None
+    if settings.search_hub_enabled:
+        from app.services.search_hub import SearchHub
+        search_hub = SearchHub()
+        search_hub.load_providers()
+        await search_hub.startup()
+
+    app.state.search_hub = search_hub
+
     # Initialize billing Redis + limits
     app.state.billing_redis = None
     app.state.billing_limits = {}
@@ -71,6 +81,9 @@ async def lifespan(app: FastAPI):
 
     if app.state.billing_redis:
         await app.state.billing_redis.aclose()
+
+    if search_hub:
+        await search_hub.shutdown()
 
     from app.services.tracing import shutdown as tracing_shutdown
     tracing_shutdown()
@@ -122,6 +135,7 @@ def create_app() -> FastAPI:
             "chain_hub": "ok" if settings.chain_hub_enabled else "disabled",
             "prompt_hub": "ok" if settings.prompt_hub_enabled else "disabled",
             "dashboard": "ok" if settings.dashboard_enabled else "disabled",
+            "search_hub": "ok" if settings.search_hub_enabled else "disabled",
         }
 
         if settings.proxy_enabled:
@@ -135,6 +149,14 @@ def create_app() -> FastAPI:
                 cb = await provider.circuit_breaker.get_status()
                 if cb["circuit_open"]:
                     components["llm_hub"] = "degraded"
+                    break
+
+        search_hub_state = getattr(app.state, "search_hub", None)
+        if settings.search_hub_enabled and search_hub_state and search_hub_state.providers:
+            for name, sp in search_hub_state.providers.items():
+                cb = await sp.circuit_breaker.get_status()
+                if cb["circuit_open"]:
+                    components["search_hub"] = "degraded"
                     break
 
         enabled = {k: v for k, v in components.items() if v != "disabled"}
@@ -153,6 +175,7 @@ def create_app() -> FastAPI:
             "chain_hub": "ok" if settings.chain_hub_enabled else "disabled",
             "prompt_hub": "ok" if settings.prompt_hub_enabled else "disabled",
             "dashboard": "ok" if settings.dashboard_enabled else "disabled",
+            "search_hub": "ok" if settings.search_hub_enabled else "disabled",
             "tracing": "ok" if settings.tracing_enabled else "disabled",
         }
 
@@ -182,6 +205,17 @@ def create_app() -> FastAPI:
                 else:
                     components["llm_hub"] = "degraded"
                 details["llm_hub_providers"] = provider_statuses
+
+        # Check Search Hub provider circuit breakers
+        search_hub_state = getattr(app.state, "search_hub", None)
+        if settings.search_hub_enabled and search_hub_state and search_hub_state.providers:
+            search_statuses = {}
+            for name, sp in search_hub_state.providers.items():
+                cb = await sp.circuit_breaker.get_status()
+                search_statuses[name] = "circuit_open" if cb["circuit_open"] else "ok"
+            if any(v != "ok" for v in search_statuses.values()):
+                components["search_hub"] = "degraded"
+                details["search_hub_providers"] = search_statuses
 
         # Check tracing backend reachability
         if settings.tracing_enabled:
@@ -460,5 +494,66 @@ def create_app() -> FastAPI:
             prompt = await get_prompt_store().format_prompt(name, data)
             metadata = ChainMetadataForTracking(chain_type=ChainType.prompt, chain_name = name, group_id = request.headers.get("x-group-id", "unknown"))
             return await get_chain_store().execute_prompt(prompt=prompt, model_name=model_name, metadata=metadata)
+
+    if settings.search_hub_enabled:
+        import time as _time
+        from app.schemas.search import SearchRequest as _SearchRequest, SearchResponse as _SearchResponse
+        from app.services.tracing import trace_search_request as _trace_search
+
+        @app.post("/search", response_model=_SearchResponse)
+        async def search(body: _SearchRequest, request: Request):
+            """Execute a search query via the configured search provider.
+
+            Use the ``provider`` field to override the default provider.
+            Pass ``X-Group-ID`` and ``X-Request-ID`` headers for tracing and billing.
+            """
+            hub = request.app.state.search_hub
+            provider = hub.resolve(body.provider)
+
+            group_id = request.headers.get("x-group-id", "unknown")
+            trace_id = request.headers.get("x-request-id")
+
+            start = _time.time()
+            response = await provider.search(body)
+            duration_ms = (_time.time() - start) * 1000
+
+            cost = provider.config.cost_per_search or None
+
+            _trace_search(
+                provider=provider.config.name,
+                query=body.query,
+                num_results=body.num_results,
+                result_count=len(response.results),
+                status_code=200,
+                duration_ms=duration_ms,
+                group_id=group_id,
+                cost=cost,
+                trace_id=trace_id,
+            )
+
+            if cost and settings.billing_enabled:
+                import asyncio as _asyncio
+                billing_redis = getattr(request.app.state, "billing_redis", None)
+                billing_limits = getattr(request.app.state, "billing_limits", {})
+                if billing_redis:
+                    from app.services.billing import charge as _charge
+                    _asyncio.create_task(_charge(billing_redis, billing_limits, group_id, cost))
+
+            return response
+
+        @app.get("/search/providers")
+        async def list_search_providers(request: Request):
+            """List all configured search providers."""
+            hub = request.app.state.search_hub
+            return {
+                "providers": [
+                    {
+                        "name": p.config.name,
+                        "type": p.config.type,
+                        "default": p.config.name == hub._default,
+                    }
+                    for p in hub.providers.values()
+                ]
+            }
 
     return app

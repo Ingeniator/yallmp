@@ -125,6 +125,53 @@ class LangfuseEmitter:
             ):
                 pass
 
+    def trace_search_request(
+        self,
+        provider: str,
+        query: str,
+        num_results: int,
+        result_count: int,
+        status_code: int,
+        duration_ms: float,
+        group_id: str,
+        cost: float | None = None,
+        trace_id: str | None = None,
+    ) -> None:
+        client = self._get_client(group_id)
+
+        metadata = {
+            "provider": provider,
+            "group_id": group_id,
+            "status_code": status_code,
+            "duration_ms": duration_ms,
+            "num_results_requested": num_results,
+            "num_results_returned": result_count,
+        }
+        cost_details = None
+        if cost is not None:
+            cost_details = {"total": cost}
+            metadata["cost"] = cost
+
+        valid_trace_id = Langfuse.create_trace_id(seed=trace_id) if trace_id else None
+        trace_context = {"trace_id": valid_trace_id} if valid_trace_id else None
+
+        end_time = datetime.now(timezone.utc)
+        start_time = end_time - timedelta(milliseconds=duration_ms)
+
+        with client.start_as_current_observation(
+            name=f"search:{provider}",
+            as_type="span",
+            input={"query": query},
+            output={"result_count": result_count},
+            metadata=metadata,
+            usage_details={"total": 1, "unit": "SEARCHES"},
+            cost_details=cost_details,
+            trace_context=trace_context,
+            start_time=start_time,
+            end_time=end_time,
+        ):
+            pass
+
     async def score(
         self,
         trace_id: str,

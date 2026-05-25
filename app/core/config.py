@@ -101,6 +101,10 @@ class AppSettings(BaseSettings):
     # Dev role switcher (docker-compose only — never enable in production)
     dashboard_dev_role_switcher: bool = False
 
+    # Search Hub
+    search_hub_enabled: bool = False
+    search_hub_directory: str = "data/search_hub"
+
     # Billing
     billing_enabled: bool = False
     billing_redis_url: str = "redis://langfuse-redis:6379/0"
