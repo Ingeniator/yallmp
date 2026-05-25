@@ -133,7 +133,7 @@ class LangfuseEmitter:
         comment: str | None,
         group_id: str,
     ) -> None:
-        """Post a score to Langfuse via the HTTP API (OTEL SDK has no score method)."""
+        """Submit a score via the Langfuse REST API (POST /api/public/scores)."""
         import httpx
 
         pk = group_id if group_id and group_id != "unknown" else self._public_key

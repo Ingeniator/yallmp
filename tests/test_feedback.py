@@ -188,9 +188,8 @@ class TestScoreTraceFacade:
 
 class TestLangfuseEmitterScore:
     @pytest.mark.asyncio
-    async def test_posts_to_langfuse_scores_endpoint(self):
+    async def test_posts_to_scores_endpoint(self):
         from app.services.langfuse_tracing import LangfuseEmitter
-        import httpx
 
         mock_langfuse = MagicMock()
         with patch.dict("sys.modules", {"langfuse": MagicMock(Langfuse=MagicMock(return_value=mock_langfuse))}):
