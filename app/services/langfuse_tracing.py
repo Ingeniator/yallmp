@@ -108,22 +108,37 @@ class LangfuseEmitter:
 
         end_time = datetime.now(timezone.utc)
         start_time = end_time - timedelta(milliseconds=duration_ms)
+        # OTEL timestamps are nanoseconds since epoch
+        start_time_ns = int(start_time.timestamp() * 1e9)
+        end_time_ns = int(end_time.timestamp() * 1e9)
 
         with propagate_attributes(session_id=session_id or None):
-            with client.start_as_current_observation(
+            # Bypass Langfuse's start_as_current_observation to pass start_time/end_time:
+            # the raw OTEL tracer accepts them natively (nanoseconds), while Langfuse's
+            # wrapper removed those params in v4. We then instantiate the Langfuse
+            # generation wrapper manually around the already-created OTEL span so all
+            # Langfuse-specific attributes (model, usage, cost …) are still set correctly.
+            from langfuse import LangfuseGeneration
+            with client._otel_tracer.start_as_current_span(
                 name=trace_name,
-                as_type="generation",
-                model=model,
-                input=input_body,
-                output=output_body,
-                metadata=metadata,
-                usage_details=usage_details or None,
-                cost_details=cost_details,
-                trace_context=trace_context,
-                start_time=start_time,
-                end_time=end_time,
-            ):
-                pass
+                start_time=start_time_ns,
+                end_on_exit=False,
+            ) as otel_span:
+                gen = LangfuseGeneration(
+                    otel_span=otel_span,
+                    langfuse_client=client,
+                    environment=getattr(client, "_environment", None),
+                    release=getattr(client, "_release", None),
+                    input=input_body,
+                    output=output_body,
+                    metadata=metadata,
+                    usage_details=usage_details or None,
+                    cost_details=cost_details,
+                    completion_start_time=start_time,
+                    model=model,
+                )
+                gen.end()
+                otel_span.end(end_time=end_time_ns)
 
     def trace_search_request(
         self,
@@ -169,8 +184,6 @@ class LangfuseEmitter:
                 usage_details={"total": 1, "unit": "SEARCHES"},
                 cost_details=cost_details,
                 trace_context=trace_context,
-                start_time=start_time,
-                end_time=end_time,
             ):
                 pass
 
