@@ -162,7 +162,7 @@
   <div class="kpi-card"><div class="kpi-value" id="kpiCost">-</div><div class="kpi-label">LLM Cost (USD)</div></div>
   <div class="kpi-card"><div class="kpi-value" id="kpiRequests">-</div><div class="kpi-label">HTTP Requests</div></div>
   <div class="kpi-card" id="kpiSearchesCard">
-    <div class="kpi-value" id="kpiSearches">-</div><div class="kpi-label">Searches</div>
+    <div class="kpi-value" id="kpiSearches">-</div><div class="kpi-label">Search Requests</div>
   </div>
   <div class="kpi-card" id="kpiSearchCostCard">
     <div class="kpi-value" id="kpiSearchCost">-</div><div class="kpi-label">Search Cost (USD)</div>
@@ -191,6 +191,17 @@
     <div class="chart-container" data-roles="SUPER_ADMIN ORG_ADMIN"><h3>Cost by Team</h3><canvas id="chartCostByGroup"></canvas></div>
   </div>
   <table id="costTable"><thead><tr></tr></thead><tbody></tbody></table>
+</div>
+
+<!-- Search Cost (all roles) -->
+<div class="section" id="searchCostSection" style="display:none">
+  <h2>Search Cost</h2>
+  <div class="charts-row">
+    <div class="chart-container"><h3>Cost by Provider</h3><canvas id="chartSearchCostByProvider"></canvas></div>
+    <div class="chart-container"><h3>Requests by Provider</h3><canvas id="chartSearchReqByProvider"></canvas></div>
+    <div class="chart-container" data-roles="SUPER_ADMIN ORG_ADMIN"><h3>Requests by Team</h3><canvas id="chartSearchReqByGroup"></canvas></div>
+  </div>
+  <table id="searchTable"><thead><tr></tr></thead><tbody></tbody></table>
 </div>
 
 <!-- Cost Trends (all roles) -->
@@ -523,6 +534,22 @@
       document.getElementById('kpiTokens').textContent   = totalTokens > 1e6 ? (totalTokens / 1e6).toFixed(1) + 'M' : totalTokens.toLocaleString();
       document.getElementById('kpiCost').textContent     = '$' + totalCost.toFixed(4);
       document.getElementById('kpiRequests').textContent = totalReqs.toLocaleString();
+
+      const totalSearches   = Object.values(s.searches_by_provider   || {}).reduce((a, b) => a + b, 0);
+      const totalSearchCost = Object.values(s.search_cost_by_provider || {}).reduce((a, b) => a + b, 0);
+      document.getElementById('kpiSearches').textContent  = Math.round(totalSearches).toLocaleString();
+      document.getElementById('kpiSearchCost').textContent = '$' + totalSearchCost.toFixed(4);
+      document.getElementById('kpiSearchesCard').style.display  = totalSearches  ? '' : 'none';
+      document.getElementById('kpiSearchCostCard').style.display = totalSearchCost ? '' : 'none';
+
+      const hasSearchData = totalSearches > 0;
+      document.getElementById('searchCostSection').style.display = hasSearchData ? '' : 'none';
+      if (hasSearchData) {
+        renderBarChart('chartSearchCostByProvider', s.search_cost_by_provider || {}, 'Cost ($)');
+        renderBarChart('chartSearchReqByProvider',  s.searches_by_provider    || {}, 'Requests');
+        renderBarChart('chartSearchReqByGroup',     s.searches_by_group       || {}, 'Requests');
+        renderTable('searchTable', data.search_requests || [], ['provider', 'group_id', 'value'], 'No search data yet');
+      }
 
       renderBarChart('chartByModel',        s.tokens_by_model          || {}, 'Tokens');
       renderBarChart('chartByGroup',        s.tokens_by_group          || {}, 'Tokens');

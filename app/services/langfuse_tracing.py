@@ -136,6 +136,7 @@ class LangfuseEmitter:
         group_id: str,
         cost: float | None = None,
         trace_id: str | None = None,
+        session_id: str | None = None,
     ) -> None:
         client = self._get_client(group_id)
 
@@ -158,19 +159,20 @@ class LangfuseEmitter:
         end_time = datetime.now(timezone.utc)
         start_time = end_time - timedelta(milliseconds=duration_ms)
 
-        with client.start_as_current_observation(
-            name=f"search:{provider}",
-            as_type="span",
-            input={"query": query} if query is not None else None,
-            output={"result_count": result_count},
-            metadata=metadata,
-            usage_details={"total": 1, "unit": "SEARCHES"},
-            cost_details=cost_details,
-            trace_context=trace_context,
-            start_time=start_time,
-            end_time=end_time,
-        ):
-            pass
+        with propagate_attributes(session_id=session_id or None):
+            with client.start_as_current_observation(
+                name=f"search:{provider}",
+                as_type="span",
+                input={"query": query} if query is not None else None,
+                output={"result_count": result_count},
+                metadata=metadata,
+                usage_details={"total": 1, "unit": "SEARCHES"},
+                cost_details=cost_details,
+                trace_context=trace_context,
+                start_time=start_time,
+                end_time=end_time,
+            ):
+                pass
 
     async def score(
         self,

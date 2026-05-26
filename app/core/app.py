@@ -512,8 +512,9 @@ def create_app() -> FastAPI:
             hub = request.app.state.search_hub
             provider = hub.resolve(body.provider)
 
-            group_id = request.headers.get("x-group-id", "unknown")
-            trace_id = request.headers.get("x-request-id")
+            group_id  = request.headers.get("x-group-id", "unknown")
+            trace_id  = request.headers.get("x-request-id")
+            session_id = request.headers.get("x-session-id")
 
             start = _time.time()
             response = await provider.search(body)
@@ -533,6 +534,7 @@ def create_app() -> FastAPI:
                 group_id=group_id,
                 cost=cost,
                 trace_id=trace_id,
+                session_id=session_id,
             )
 
             if cost and settings.billing_enabled:

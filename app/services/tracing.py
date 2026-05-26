@@ -48,6 +48,7 @@ class TraceEmitter(Protocol):
         group_id: str,
         cost: float | None,
         trace_id: str | None,
+        session_id: str | None,
     ) -> None: ...
 
     def get_langchain_callback(self, trace_name: str, metadata: dict) -> object | None: ...
@@ -154,6 +155,7 @@ def trace_search_request(
     group_id: str,
     cost: float | None = None,
     trace_id: str | None = None,
+    session_id: str | None = None,
 ) -> None:
     """Convenience wrapper — emit a search request trace via the configured emitter."""
     emitter = get_emitter()
@@ -169,6 +171,7 @@ def trace_search_request(
         result_count=result_count,
         group_id=group_id,
         cost=cost,
+        session_id=session_id,
     )
     try:
         emitter.trace_search_request(
@@ -181,6 +184,7 @@ def trace_search_request(
             group_id=group_id,
             cost=cost,
             trace_id=trace_id,
+            session_id=session_id,
         )
     except Exception as e:
         logger.error("Error in trace_search_request", exc_info=e)
