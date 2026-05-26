@@ -34,6 +34,25 @@ llm_requests_total = Counter(
     ["model", "provider", "group_id"]
 )
 
+# Search metrics
+search_requests_total = Counter(
+    'search_requests_total',
+    'Total search requests',
+    ["provider", "group_id"]
+)
+search_cost_total = Counter(
+    'search_cost_total',
+    'Total search cost in USD',
+    ["provider", "group_id"]
+)
+
+
+def record_search(provider: str, group_id: str, cost: float | None = None) -> None:
+    """Increment search Prometheus counters. Call once per search request."""
+    search_requests_total.labels(provider=provider, group_id=group_id).inc()
+    if cost:
+        search_cost_total.labels(provider=provider, group_id=group_id).inc(cost)
+
 
 class MetricsCallbackHandler(BaseCallbackHandler):
     def __init__(

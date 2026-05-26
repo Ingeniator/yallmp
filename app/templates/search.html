@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Search — AI Suite</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f7fa; color: #333; min-height: 100vh; }
+
+  /* ── Layout ── */
+  .page { display: flex; flex-direction: column; min-height: 100vh; }
+
+  .topbar { background: #fff; border-bottom: 1px solid #e8ecf0; padding: 0 24px; display: flex; align-items: center; gap: 20px; height: 52px; flex-shrink: 0; }
+  .topbar-logo { font-size: 0.9rem; font-weight: 700; color: #333; text-decoration: none; white-space: nowrap; }
+  .topbar-sep { color: #ddd; }
+  .topbar-title { font-size: 0.9rem; color: #555; }
+  .topbar-link { margin-left: auto; font-size: 0.82rem; color: #4a90d9; text-decoration: none; }
+  .topbar-link:hover { text-decoration: underline; }
+
+  .main { flex: 1; display: flex; flex-direction: column; max-width: 860px; width: 100%; margin: 0 auto; padding: 32px 20px 48px; }
+
+  /* ── Search form ── */
+  .search-form { background: #fff; border-radius: 10px; box-shadow: 0 1px 4px rgba(0,0,0,0.1); padding: 24px; margin-bottom: 24px; }
+  .search-form h1 { font-size: 1.15rem; margin-bottom: 18px; color: #222; display: flex; align-items: center; gap: 8px; }
+  .search-form h1 .icon { font-size: 1.1rem; }
+
+  .form-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+  .form-field { display: flex; flex-direction: column; gap: 5px; }
+  .form-field label { font-size: 0.78rem; font-weight: 600; color: #555; text-transform: uppercase; letter-spacing: 0.04em; }
+  .form-field.grow { flex: 1; min-width: 220px; }
+
+  input[type="text"] {
+    padding: 9px 12px; border: 1.5px solid #dde2ea; border-radius: 6px;
+    font-size: 0.9rem; font-family: inherit; width: 100%;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  input[type="text"]:focus { outline: none; border-color: #4a90d9; box-shadow: 0 0 0 3px rgba(74,144,217,0.12); }
+  input[type="text"]::placeholder { color: #bbb; }
+
+  select {
+    padding: 9px 12px; border: 1.5px solid #dde2ea; border-radius: 6px;
+    font-size: 0.9rem; font-family: inherit; background: #fff; cursor: pointer;
+    appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23aaa'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 10px center; padding-right: 28px;
+    transition: border-color 0.15s;
+  }
+  select:focus { outline: none; border-color: #4a90d9; }
+
+  .btn-search {
+    padding: 9px 22px; background: #4a90d9; color: #fff;
+    border: none; border-radius: 6px; font-size: 0.9rem; font-family: inherit;
+    cursor: pointer; font-weight: 600; white-space: nowrap;
+    transition: background 0.15s, transform 0.1s;
+  }
+  .btn-search:hover:not(:disabled) { background: #3a7bc8; }
+  .btn-search:active:not(:disabled) { transform: scale(0.98); }
+  .btn-search:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .form-options { display: flex; gap: 16px; margin-top: 14px; flex-wrap: wrap; align-items: center; }
+  .form-options label { display: flex; align-items: center; gap: 6px; font-size: 0.82rem; color: #666; cursor: pointer; user-select: none; }
+  .form-options input[type="checkbox"] { cursor: pointer; accent-color: #4a90d9; width: 14px; height: 14px; }
+
+  /* ── Provider chips ── */
+  .provider-row { display: flex; gap: 8px; margin-bottom: 18px; flex-wrap: wrap; align-items: center; }
+  .provider-chip {
+    padding: 4px 12px; border-radius: 16px; font-size: 0.78rem; font-weight: 600;
+    border: 1.5px solid #dde2ea; background: #fff; color: #666; cursor: pointer;
+    transition: all 0.15s; user-select: none;
+  }
+  .provider-chip:hover { border-color: #4a90d9; color: #4a90d9; }
+  .provider-chip.active { border-color: #4a90d9; background: #4a90d9; color: #fff; }
+  .provider-chip.default-star::after { content: ' ★'; opacity: 0.7; }
+  .provider-label { font-size: 0.78rem; color: #999; }
+
+  /* ── Status ── */
+  .status-bar { min-height: 20px; margin-bottom: 8px; font-size: 0.82rem; color: #888; display: flex; align-items: center; gap: 8px; }
+  .status-bar.error { color: #d94a68; }
+  .status-bar.ok { color: #4caf50; }
+  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #dde2ea; border-top-color: #4a90d9; border-radius: 50%; animation: spin 0.7s linear infinite; flex-shrink: 0; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── Results ── */
+  .results-meta { font-size: 0.8rem; color: #888; margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
+  .results-meta .tag { background: #f0f4f8; padding: 1px 8px; border-radius: 10px; font-size: 0.75rem; color: #666; }
+
+  .answer-box {
+    background: linear-gradient(135deg, #f0f7ff 0%, #eaf3ff 100%);
+    border: 1px solid #c2dff7; border-radius: 8px;
+    padding: 14px 18px; margin-bottom: 18px;
+  }
+  .answer-label { font-size: 0.72rem; font-weight: 700; color: #4a90d9; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; }
+  .answer-text { font-size: 0.88rem; color: #333; line-height: 1.6; }
+
+  .result-card {
+    background: #fff; border: 1px solid #e8ecf0; border-radius: 8px;
+    padding: 14px 16px; margin-bottom: 10px;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  .result-card:hover { border-color: #c2dff7; box-shadow: 0 2px 8px rgba(74,144,217,0.08); }
+
+  .result-header { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 6px; }
+  .result-rank {
+    flex-shrink: 0; width: 22px; height: 22px; border-radius: 50%;
+    background: #4a90d9; color: #fff; font-size: 0.68rem; font-weight: 700;
+    display: flex; align-items: center; justify-content: center; margin-top: 1px;
+  }
+  .result-body { flex: 1; min-width: 0; }
+  .result-title { font-size: 0.92rem; font-weight: 600; color: #1a1a2e; line-height: 1.35; margin-bottom: 3px; }
+  .result-url { font-size: 0.75rem; color: #4a90d9; text-decoration: none; word-break: break-all; display: block; }
+  .result-url:hover { text-decoration: underline; }
+  .result-score { flex-shrink: 0; font-size: 0.72rem; color: #aaa; background: #f5f5f5; padding: 2px 7px; border-radius: 10px; margin-left: 4px; }
+  .result-snippet { font-size: 0.84rem; color: #555; line-height: 1.55; margin-top: 7px; }
+
+  .empty-state { text-align: center; padding: 48px 20px; color: #bbb; }
+  .empty-state .empty-icon { font-size: 2.5rem; margin-bottom: 12px; }
+  .empty-state p { font-size: 0.9rem; }
+
+  /* ── Responsive ── */
+  @media (max-width: 600px) {
+    .main { padding: 16px 12px 32px; }
+    .search-form { padding: 16px; }
+    .form-row { flex-direction: column; }
+    .btn-search { width: 100%; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <nav class="topbar">
+    <a class="topbar-logo" href="../dashboard">AI Suite</a>
+    <span class="topbar-sep">/</span>
+    <span class="topbar-title">Search</span>
+    <a class="topbar-link" href="../dashboard">← Dashboard</a>
+  </nav>
+
+  <main class="main">
+    <div class="search-form">
+      <h1><span class="icon">🔍</span> Search</h1>
+
+      <!-- Provider chips -->
+      <div class="provider-row" id="providerRow">
+        <span class="provider-label">Provider:</span>
+        <span class="provider-chip active" data-name="" id="chipDefault">default</span>
+      </div>
+
+      <!-- Query row -->
+      <div class="form-row">
+        <div class="form-field grow">
+          <label for="queryInput">Query</label>
+          <input type="text" id="queryInput" placeholder="What do you want to search for?" autocomplete="off" autofocus>
+        </div>
+        <div class="form-field">
+          <label for="numResults">Results</label>
+          <select id="numResults">
+            <option value="3">3</option>
+            <option value="5" selected>5</option>
+            <option value="10">10</option>
+          </select>
+        </div>
+        <div class="form-field">
+          <label>&nbsp;</label>
+          <button class="btn-search" id="searchBtn">Search</button>
+        </div>
+      </div>
+
+      <!-- Options row -->
+      <div class="form-options">
+        <label>
+          <input type="checkbox" id="optAdvanced"> Advanced depth
+        </label>
+        <label>
+          <input type="checkbox" id="optRawContent"> Include raw content
+        </label>
+      </div>
+    </div>
+
+    <!-- Status -->
+    <div class="status-bar" id="statusBar"></div>
+
+    <!-- Results -->
+    <div id="resultsArea"></div>
+  </main>
+
+</div>
+<script>
+(function() {
+  const ROOT          = window.location.pathname.replace(/\/search\/ui\/?.*$/, '');
+  const SEARCH_API    = ROOT + '/search';
+  const PROVIDERS_API = ROOT + '/search/providers';
+
+  const queryInput  = document.getElementById('queryInput');
+  const numResults  = document.getElementById('numResults');
+  const searchBtn   = document.getElementById('searchBtn');
+  const statusBar   = document.getElementById('statusBar');
+  const resultsArea = document.getElementById('resultsArea');
+  const providerRow = document.getElementById('providerRow');
+  const optAdvanced = document.getElementById('optAdvanced');
+  const optRaw      = document.getElementById('optRawContent');
+
+  let selectedProvider = '';   // '' = default
+
+  // ── Escape HTML ─────────────────────────────────────────────────────────────
+  function esc(s) {
+    const d = document.createElement('div');
+    d.textContent = String(s == null ? '' : s);
+    return d.innerHTML;
+  }
+
+  // ── Provider chips ───────────────────────────────────────────────────────────
+  async function loadProviders() {
+    try {
+      const resp = await fetch(PROVIDERS_API);
+      if (!resp.ok) return;
+      const data = await resp.json();
+      const providers = data.providers || [];
+
+      providers.forEach(function(p) {
+        const chip = document.createElement('span');
+        chip.className = 'provider-chip' + (p.default ? ' default-star' : '');
+        chip.dataset.name = p.name;
+        chip.textContent = p.name;
+        chip.addEventListener('click', function() { selectProvider(p.name); });
+        providerRow.appendChild(chip);
+      });
+    } catch (e) {
+      // Search hub not available — chips stay as just "default"
+    }
+  }
+
+  function selectProvider(name) {
+    selectedProvider = name;
+    providerRow.querySelectorAll('.provider-chip').forEach(function(c) {
+      c.classList.toggle('active', c.dataset.name === name);
+    });
+  }
+
+  document.getElementById('chipDefault').addEventListener('click', function() {
+    selectProvider('');
+  });
+
+  // ── Status helpers ───────────────────────────────────────────────────────────
+  function setStatus(msg, type, spinning) {
+    statusBar.className = 'status-bar' + (type ? ' ' + type : '');
+    statusBar.innerHTML = (spinning ? '<span class="spinner"></span>' : '') + esc(msg);
+  }
+
+  function clearStatus() { statusBar.className = 'status-bar'; statusBar.innerHTML = ''; }
+
+  // ── Render results ───────────────────────────────────────────────────────────
+  function renderResults(data, elapsed) {
+    const results = data.results || [];
+
+    if (results.length === 0 && !data.answer) {
+      resultsArea.innerHTML =
+        '<div class="empty-state">' +
+          '<div class="empty-icon">🔍</div>' +
+          '<p>No results returned for this query.</p>' +
+        '</div>';
+      return;
+    }
+
+    let html = '';
+
+    // Meta line
+    let meta = '<div class="results-meta">';
+    meta += '<span>' + results.length + ' result' + (results.length !== 1 ? 's' : '') + '</span>';
+    if (data.provider) meta += '<span class="tag">' + esc(data.provider) + '</span>';
+    if (elapsed)       meta += '<span class="tag">' + elapsed + ' ms</span>';
+    meta += '</div>';
+    html += meta;
+
+    // AI answer box (Tavily)
+    if (data.answer) {
+      html += '<div class="answer-box">' +
+        '<div class="answer-label">AI Answer</div>' +
+        '<div class="answer-text">' + esc(data.answer) + '</div>' +
+        '</div>';
+    }
+
+    // Result cards
+    html += results.map(function(r, i) {
+      const score = r.score != null
+        ? '<span class="result-score">' + r.score.toFixed(2) + '</span>'
+        : '';
+      const snippet = r.content
+        ? '<div class="result-snippet">' +
+            esc(r.content.slice(0, 400)) + (r.content.length > 400 ? '…' : '') +
+          '</div>'
+        : '';
+      return '<div class="result-card">' +
+        '<div class="result-header">' +
+          '<div class="result-rank">' + (i + 1) + '</div>' +
+          '<div class="result-body">' +
+            '<div class="result-title">' + esc(r.title || '(no title)') + score + '</div>' +
+            '<a class="result-url" href="' + esc(r.url) + '" target="_blank" rel="noopener">' +
+              esc(r.url) +
+            '</a>' +
+          '</div>' +
+        '</div>' +
+        snippet +
+      '</div>';
+    }).join('');
+
+    resultsArea.innerHTML = html;
+  }
+
+  // ── Run search ───────────────────────────────────────────────────────────────
+  async function runSearch() {
+    const query = queryInput.value.trim();
+    if (!query) {
+      setStatus('Please enter a search query.', 'error');
+      return;
+    }
+
+    searchBtn.disabled = true;
+    resultsArea.innerHTML = '';
+    setStatus('Searching…', '', true);
+
+    const payload = {
+      query:              query,
+      num_results:        parseInt(numResults.value, 10) || 5,
+      search_depth:       optAdvanced.checked ? 'advanced' : 'basic',
+      include_raw_content: optRaw.checked,
+    };
+    if (selectedProvider) payload.provider = selectedProvider;
+
+    const t0 = Date.now();
+    try {
+      const resp = await fetch(SEARCH_API, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(payload),
+      });
+      const elapsed = Date.now() - t0;
+      const json = await resp.json();
+
+      if (!resp.ok) {
+        const detail = json.detail || JSON.stringify(json);
+        setStatus('Error ' + resp.status + ': ' + detail, 'error');
+        return;
+      }
+
+      clearStatus();
+      renderResults(json, elapsed);
+    } catch (e) {
+      setStatus('Request failed: ' + e.message, 'error');
+    } finally {
+      searchBtn.disabled = false;
+    }
+  }
+
+  searchBtn.addEventListener('click', runSearch);
+  queryInput.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') runSearch();
+  });
+
+  // ── URL state: pre-fill query from ?q= ──────────────────────────────────────
+  const urlQ = new URLSearchParams(window.location.search).get('q');
+  if (urlQ) {
+    queryInput.value = urlQ;
+    runSearch();
+  }
+
+  loadProviders();
+})();
+</script>
+</body>
+</html>

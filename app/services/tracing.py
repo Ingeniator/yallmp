@@ -160,6 +160,8 @@ def trace_search_request(
     if emitter is None:
         logger.debug("trace_search_request skipped: emitter is None")
         return
+    if not settings.tracing_log_io:
+        query = None
     logger.debug(
         "trace_search_request",
         provider=provider,

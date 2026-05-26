@@ -6,7 +6,7 @@
     "type": "APIKEY",
     "api_key": "${TAVILY_API_KEY}"
   },
-  "default": true,
+  "default": false,
   "cost_per_search": 0.001,
   "timeout": {
     "connect": 10,

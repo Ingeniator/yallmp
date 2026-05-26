@@ -507,6 +507,8 @@ def create_app() -> FastAPI:
             Use the ``provider`` field to override the default provider.
             Pass ``X-Group-ID`` and ``X-Request-ID`` headers for tracing and billing.
             """
+            from app.services.metrics_callback_handler import record_search as _record_search
+
             hub = request.app.state.search_hub
             provider = hub.resolve(body.provider)
 
@@ -518,6 +520,8 @@ def create_app() -> FastAPI:
             duration_ms = (_time.time() - start) * 1000
 
             cost = provider.config.cost_per_search or None
+
+            _record_search(provider=provider.config.name, group_id=group_id, cost=cost)
 
             _trace_search(
                 provider=provider.config.name,
@@ -555,5 +559,14 @@ def create_app() -> FastAPI:
                     for p in hub.providers.values()
                 ]
             }
+
+        _search_html = pathlib.Path(__file__).resolve().parent.parent.joinpath(
+            "templates", "search.html"
+        ).read_text()
+
+        @app.get("/search/ui")
+        async def search_ui():
+            """Search playground — interactive UI for testing search providers."""
+            return HTMLResponse(content=_search_html)
 
     return app

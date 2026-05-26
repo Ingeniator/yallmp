@@ -106,23 +106,27 @@ async def fetch_metrics_from_prometheus(url, timeout, group_id, is_org_admin, en
 
     if time_window:
         queries = {
-            "total_tokens": f"increase(llm_total_token_usage_total{token_selector}[{time_window}])",
-            "prompt_tokens": f"increase(llm_prompt_token_usage_total{token_selector}[{time_window}])",
-            "completion_tokens": f"increase(llm_completion_token_usage_total{token_selector}[{time_window}])",
-            "cost": f"increase(llm_cost_total{token_selector}[{time_window}])",
-            "http_requests": f"increase(http_requests_total{http_selector}[{time_window}])",
-            "http_duration_sum": f"increase(http_request_duration_seconds_sum{http_selector}[{time_window}])",
-            "http_duration_count": f"increase(http_request_duration_seconds_count{http_selector}[{time_window}])",
+            "total_tokens":       f"increase(llm_total_token_usage_total{token_selector}[{time_window}])",
+            "prompt_tokens":      f"increase(llm_prompt_token_usage_total{token_selector}[{time_window}])",
+            "completion_tokens":  f"increase(llm_completion_token_usage_total{token_selector}[{time_window}])",
+            "cost":               f"increase(llm_cost_total{token_selector}[{time_window}])",
+            "http_requests":      f"increase(http_requests_total{http_selector}[{time_window}])",
+            "http_duration_sum":  f"increase(http_request_duration_seconds_sum{http_selector}[{time_window}])",
+            "http_duration_count":f"increase(http_request_duration_seconds_count{http_selector}[{time_window}])",
+            "search_requests":    f"increase(search_requests_total{token_selector}[{time_window}])",
+            "search_cost":        f"increase(search_cost_total{token_selector}[{time_window}])",
         }
     else:
         queries = {
-            "total_tokens": f"llm_total_token_usage_total{token_selector}",
-            "prompt_tokens": f"llm_prompt_token_usage_total{token_selector}",
-            "completion_tokens": f"llm_completion_token_usage_total{token_selector}",
-            "cost": f"llm_cost_total{token_selector}",
-            "http_requests": f"http_requests_total{http_selector}",
-            "http_duration_sum": f"http_request_duration_seconds_sum{http_selector}",
-            "http_duration_count": f"http_request_duration_seconds_count{http_selector}",
+            "total_tokens":       f"llm_total_token_usage_total{token_selector}",
+            "prompt_tokens":      f"llm_prompt_token_usage_total{token_selector}",
+            "completion_tokens":  f"llm_completion_token_usage_total{token_selector}",
+            "cost":               f"llm_cost_total{token_selector}",
+            "http_requests":      f"http_requests_total{http_selector}",
+            "http_duration_sum":  f"http_request_duration_seconds_sum{http_selector}",
+            "http_duration_count":f"http_request_duration_seconds_count{http_selector}",
+            "search_requests":    f"search_requests_total{token_selector}",
+            "search_cost":        f"search_cost_total{token_selector}",
         }
 
     async with httpx.AsyncClient(timeout=timeout, auth=auth, verify=verify) as client:
@@ -147,11 +151,16 @@ async def fetch_metrics_from_prometheus(url, timeout, group_id, is_org_admin, en
         + _extract_metric_entries(raw["http_duration_count"], {"stat": "count"})
     )
 
+    search_requests = _extract_metric_entries(raw["search_requests"])
+    search_cost = _extract_metric_entries(raw["search_cost"])
+
     return {
         "token_usage": token_usage,
         "http_requests": http_requests,
         "http_duration": http_duration,
         "cost": cost,
+        "search_requests": search_requests,
+        "search_cost": search_cost,
     }
 
 

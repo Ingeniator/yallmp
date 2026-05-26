@@ -161,7 +161,7 @@ class LangfuseEmitter:
         with client.start_as_current_observation(
             name=f"search:{provider}",
             as_type="span",
-            input={"query": query},
+            input={"query": query} if query is not None else None,
             output={"result_count": result_count},
             metadata=metadata,
             usage_details={"total": 1, "unit": "SEARCHES"},
