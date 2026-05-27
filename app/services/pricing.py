@@ -1,6 +1,7 @@
 import asyncio
 import json
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
@@ -9,6 +10,17 @@ from app.core.logging_config import setup_logging
 from app.schemas.provider import PricingInfo
 
 logger = setup_logging()
+
+
+@dataclass
+class CostBreakdown:
+    """Per-call cost split into input (prompt) and output (completion) components."""
+    input: float
+    output: float
+    total: float
+
+    def __bool__(self) -> bool:
+        return self.total != 0
 
 _DEFAULT_TTL = 86400  # 24 hours
 
@@ -101,7 +113,7 @@ class PricingCache:
         model_name: str,
         prompt_tokens: int,
         completion_tokens: int,
-    ) -> float | None:
+    ) -> CostBreakdown | None:
         models = self._cache.get(provider_prefix)
         if not models:
             logger.debug("get_cost: no cache for provider", provider=provider_prefix)
@@ -115,17 +127,16 @@ class PricingCache:
                 available=list(models.keys()),
             )
             return None
-        return (
-            prompt_tokens * pricing.input_cost_per_token
-            + completion_tokens * pricing.output_cost_per_token
-        )
+        input_cost = prompt_tokens * pricing.input_cost_per_token
+        output_cost = completion_tokens * pricing.output_cost_per_token
+        return CostBreakdown(input=input_cost, output=output_cost, total=input_cost + output_cost)
 
     def find_cost(
         self,
         model_name: str,
         prompt_tokens: int,
         completion_tokens: int,
-    ) -> tuple[str, str, float] | None:
+    ) -> tuple[str, str, CostBreakdown] | None:
         """Search all providers for pricing and return (prefix, currency, cost) or None."""
         for prefix in self._cache:
             cost = self.get_cost(prefix, model_name, prompt_tokens, completion_tokens)

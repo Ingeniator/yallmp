@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING
 
 import opentelemetry.trace as otel_trace_api
 from langfuse import Langfuse, LangfuseGeneration, LangfuseSpan, propagate_attributes
@@ -10,6 +11,9 @@ from langfuse._client.attributes import LangfuseOtelSpanAttributes
 
 from app.core.config import settings
 from app.core.logging_config import setup_logging
+
+if TYPE_CHECKING:
+    from app.services.pricing import CostBreakdown
 
 # Langfuse internal attribute: tells the backend to render this span as a root trace
 # even though it carries a remote parent context (needed for trace_id stitching).
@@ -82,7 +86,7 @@ class LangfuseEmitter:
         duration_ms: float,
         group_id: str,
         is_streaming: bool,
-        cost: float | None = None,
+        cost: "CostBreakdown | None" = None,
         session_id: str | None = None,
         trace_id: str | None = None,
     ) -> None:
@@ -106,8 +110,10 @@ class LangfuseEmitter:
         }
         cost_details = None
         if cost is not None:
-            cost_details = {"total": cost}
-            metadata["cost"] = cost
+            cost_details = {"input": cost.input, "output": cost.output, "total": cost.total}
+            metadata["cost"] = cost.total
+            metadata["input_cost"] = cost.input
+            metadata["output_cost"] = cost.output
 
         trace_name = model or "llm-proxy"
         valid_trace_id = Langfuse.create_trace_id(seed=trace_id) if trace_id else None

@@ -26,6 +26,16 @@ llm_cost = Counter(
     'Total estimated cost in provider currency',
     ["provider", "currency", "model", "group_id"]
 )
+llm_input_cost = Counter(
+    'llm_input_cost',
+    'Estimated input (prompt) cost in provider currency',
+    ["provider", "currency", "model", "group_id"]
+)
+llm_output_cost = Counter(
+    'llm_output_cost',
+    'Estimated output (completion) cost in provider currency',
+    ["provider", "currency", "model", "group_id"]
+)
 
 # Business metrics
 llm_requests_total = Counter(
@@ -114,9 +124,12 @@ class MetricsCallbackHandler(BaseCallbackHandler):
                 self.provider_prefix, pricing_model, prompt_token_usage, completion_token_usage,
             )
             if cost is not None:
-                llm_cost.labels(
+                cost_labels = dict(
                     provider=self.provider_prefix,
                     currency=self.currency,
                     model=model_name,
                     group_id=group_id,
-                ).inc(cost)
+                )
+                llm_cost.labels(**cost_labels).inc(cost.total)
+                llm_input_cost.labels(**cost_labels).inc(cost.input)
+                llm_output_cost.labels(**cost_labels).inc(cost.output)

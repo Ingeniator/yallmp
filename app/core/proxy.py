@@ -423,12 +423,12 @@ def _emit_completions_metrics(
         trace_id=request.headers.get("x-request-id"),
     )
 
-    if cost and settings.billing_enabled:
+    if cost is not None and settings.billing_enabled:
         billing_redis = getattr(request.app.state, "billing_redis", None)
         billing_limits = getattr(request.app.state, "billing_limits", {})
         if billing_redis:
             from app.services.billing import charge
-            asyncio.create_task(charge(billing_redis, billing_limits, request.headers.get("x-group-id", "unknown"), cost))
+            asyncio.create_task(charge(billing_redis, billing_limits, request.headers.get("x-group-id", "unknown"), cost.total))
 
 
 def _make_error_response(response, provider_label: str | None = None) -> JSONResponse:
@@ -748,12 +748,12 @@ def _emit_streaming_metrics(
                 trace_id=request.headers.get("x-request-id"),
             )
 
-            if cost and settings.billing_enabled:
+            if cost is not None and settings.billing_enabled:
                 billing_redis = getattr(request.app.state, "billing_redis", None)
                 billing_limits = getattr(request.app.state, "billing_limits", {})
                 if billing_redis:
                     from app.services.billing import charge
-                    asyncio.create_task(charge(billing_redis, billing_limits, request.headers.get("x-group-id", "unknown"), cost))
+                    asyncio.create_task(charge(billing_redis, billing_limits, request.headers.get("x-group-id", "unknown"), cost.total))
     except Exception as e:
         logger.error("Error processing streaming LLM usage metrics", exc_info=e)
 

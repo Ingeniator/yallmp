@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from app.core.config import settings
 from app.core.logging_config import setup_logging
+
+if TYPE_CHECKING:
+    from app.services.pricing import CostBreakdown
 
 logger = setup_logging()
 
@@ -23,7 +26,7 @@ class TraceEmitter(Protocol):
         duration_ms: float,
         group_id: str,
         is_streaming: bool,
-        cost: float | None = None,
+        cost: "CostBreakdown | None" = None,
         session_id: str | None = None,
         trace_id: str | None = None,
     ) -> None: ...
@@ -83,7 +86,7 @@ def trace_proxy_request(
     duration_ms: float,
     group_id: str,
     is_streaming: bool,
-    cost: float | None = None,
+    cost: "CostBreakdown | None" = None,
     session_id: str | None = None,
     trace_id: str | None = None,
 ) -> None:
