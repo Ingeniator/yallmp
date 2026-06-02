@@ -6,7 +6,8 @@ from httpx import Response as HTTPXResponse, Request as HTTPXRequest
 from starlette.requests import Request
 
 from app.core.proxy import proxy_request_to_provider, _strip_model_prefix
-from app.schemas.provider import LlmProviderConfig, AuthConfig, AuthType
+from app.schemas.provider import LlmProviderConfig, AuthConfig, AuthType, AliasEntry
+from app.services.llm_hub import LlmHub, LlmProvider
 
 
 def _make_request(method="POST", path="/llm/v1/chat/completions", body=b"", headers=None):
@@ -223,3 +224,167 @@ async def test_provider_routing_error_response():
         )
 
     assert response.status_code == 500
+
+
+# --- alias fallback routing tests ---
+
+def _mock_settings_patch():
+    m = MagicMock()
+    m.proxy_exclude_headers = "host"
+    m.proxy_max_retries = 0
+    m.proxy_base_delay = 0.01
+    m.proxy_backoff_factor = 2.0
+    m.proxy_failure_threshold = 0
+    m.proxy_window_size = 60
+    m.proxy_recovery_time = 30
+    m.billing_enabled = False
+    m.tracing_enabled = False
+    return m
+
+
+def _build_hub_with_alias(primary_response, fallback_response):
+    """Build a LlmHub with two providers and one alias wiring them together."""
+    hub = LlmHub()
+
+    for prefix, mock_resp in [("primary-provider", primary_response), ("fallback-provider", fallback_response)]:
+        config = LlmProviderConfig(
+            prefix=prefix,
+            base_url=f"http://{prefix}.api",
+            auth=AuthConfig(type=AuthType.NONE),
+            max_retries=0,
+            base_delay=0.01,
+        )
+        provider = LlmProvider(config)
+        provider.client = AsyncMock()
+        provider.client.request = AsyncMock(return_value=mock_resp)
+        provider.circuit_breaker = MagicMock()
+        provider.circuit_breaker.check_open = AsyncMock(return_value=False)
+        provider.circuit_breaker.record_success = AsyncMock()
+        provider.circuit_breaker.record_failure = AsyncMock(return_value=False)
+        hub.providers[prefix] = provider
+
+    hub.aliases["smart"] = AliasEntry(
+        target="primary-provider/fast-model",
+        fallback="fallback-provider/safe-model",
+    )
+    return hub
+
+
+@pytest.mark.asyncio
+async def test_alias_uses_primary_on_success():
+    ok_resp = HTTPXResponse(
+        status_code=200,
+        json={"choices": [], "usage": {}},
+        request=HTTPXRequest("POST", "http://primary-provider.api/v1/chat/completions"),
+    )
+    hub = _build_hub_with_alias(primary_response=ok_resp, fallback_response=ok_resp)
+
+    alias = hub.resolve_alias("smart")
+    primary = hub.resolve_model(alias.target)
+    assert primary is not None
+    p_provider, p_stripped = primary
+
+    body = json.dumps({"model": "smart", "messages": []}).encode()
+    request = _make_request(body=body)
+
+    with patch("app.core.proxy.settings", _mock_settings_patch()):
+        response = await proxy_request_to_provider(
+            provider=p_provider,
+            path="v1/chat/completions",
+            request=request,
+            auth_headers={},
+            original_model="smart",
+            stripped_model=p_stripped,
+        )
+
+    assert response.status_code == 200
+    # fallback provider should not have been called
+    hub.providers["fallback-provider"].client.request.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_alias_falls_back_when_primary_fails():
+    """Primary returns 500 → fallback is tried and returns 200."""
+    fail_resp = HTTPXResponse(
+        status_code=500,
+        json={"error": "upstream error"},
+        request=HTTPXRequest("POST", "http://primary-provider.api/v1/chat/completions"),
+    )
+    ok_resp = HTTPXResponse(
+        status_code=200,
+        json={"choices": [{"message": {"content": "ok"}}], "usage": {}},
+        request=HTTPXRequest("POST", "http://fallback-provider.api/v1/chat/completions"),
+    )
+    hub = _build_hub_with_alias(primary_response=fail_resp, fallback_response=ok_resp)
+
+    alias = hub.resolve_alias("smart")
+    primary = hub.resolve_model(alias.target)
+    p_provider, p_stripped = primary
+
+    body = json.dumps({"model": "smart", "messages": []}).encode()
+    request = _make_request(body=body)
+
+    settings_mock = _mock_settings_patch()
+    with patch("app.core.proxy.settings", settings_mock):
+        primary_response = await proxy_request_to_provider(
+            provider=p_provider,
+            path="v1/chat/completions",
+            request=request,
+            auth_headers={},
+            original_model="smart",
+            stripped_model=p_stripped,
+        )
+
+        # Simulate app.py fallback logic
+        assert alias.fallback is not None
+        assert isinstance(primary_response, JSONResponse)
+        assert primary_response.status_code >= 400
+
+        fb = hub.resolve_model(alias.fallback)
+        assert fb is not None
+        fb_provider, fb_stripped = fb
+
+        final_response = await proxy_request_to_provider(
+            provider=fb_provider,
+            path="v1/chat/completions",
+            request=request,
+            auth_headers={},
+            original_model="smart",
+            stripped_model=fb_stripped,
+        )
+
+    assert final_response.status_code == 200
+    assert fb_stripped == "safe-model"
+
+
+@pytest.mark.asyncio
+async def test_alias_no_fallback_returns_primary_error():
+    """Alias without fallback returns the primary error as-is."""
+    fail_resp = HTTPXResponse(
+        status_code=503,
+        json={"error": "service unavailable"},
+        request=HTTPXRequest("POST", "http://primary-provider.api/v1/chat/completions"),
+    )
+    hub = _build_hub_with_alias(primary_response=fail_resp, fallback_response=fail_resp)
+    hub.aliases["no-fallback"] = AliasEntry(target="primary-provider/fast-model")
+
+    alias = hub.resolve_alias("no-fallback")
+    assert alias.fallback is None
+
+    primary = hub.resolve_model(alias.target)
+    p_provider, p_stripped = primary
+
+    body = json.dumps({"model": "no-fallback", "messages": []}).encode()
+    request = _make_request(body=body)
+
+    with patch("app.core.proxy.settings", _mock_settings_patch()):
+        response = await proxy_request_to_provider(
+            provider=p_provider,
+            path="v1/chat/completions",
+            request=request,
+            auth_headers={},
+            original_model="no-fallback",
+            stripped_model=p_stripped,
+        )
+
+    assert response.status_code == 503

@@ -8,7 +8,7 @@ from httpx import AsyncClient, Timeout, Limits
 from app.core.config import settings
 from app.core.logging_config import setup_logging
 from app.core.proxy import CircuitBreaker
-from app.schemas.provider import LlmProviderConfig, AuthType
+from app.schemas.provider import LlmProviderConfig, AliasEntry, AuthType
 from app.services.token_manager import OIDCTokenManager
 
 logger = setup_logging()
@@ -65,6 +65,7 @@ class LlmHub:
 
     def __init__(self):
         self.providers: dict[str, LlmProvider] = {}
+        self.aliases: dict[str, AliasEntry] = {}
 
     def load_providers(self, directory: str | None = None):
         directory = directory or settings.llm_hub_directory
@@ -97,6 +98,23 @@ class LlmHub:
 
             except Exception as e:
                 logger.error(f"Failed to load provider from {json_file.name}: {e}")
+
+        self._load_aliases(hub_path)
+
+    def _load_aliases(self, hub_path: Path):
+        aliases_file = hub_path / "aliases.json"
+        if not aliases_file.exists():
+            return
+        try:
+            data = json.loads(aliases_file.read_text(encoding="utf-8"))
+            for name, entry in data.items():
+                self.aliases[name] = AliasEntry(**entry)
+            logger.info(f"Loaded {len(self.aliases)} model aliases from {aliases_file.name}")
+        except Exception as e:
+            logger.error(f"Failed to load aliases from {aliases_file}: {e}")
+
+    def resolve_alias(self, model: str) -> AliasEntry | None:
+        return self.aliases.get(model)
 
     async def startup(self):
         for prefix, provider in self.providers.items():

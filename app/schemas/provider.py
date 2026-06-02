@@ -26,6 +26,11 @@ class TimeoutConfig(BaseModel):
     pool: int | None = None
 
 
+class AliasEntry(BaseModel):
+    target: str
+    fallback: str | None = None
+
+
 class PricingInfo(BaseModel):
     input_cost_per_token: float
     output_cost_per_token: float

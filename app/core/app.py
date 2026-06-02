@@ -422,6 +422,37 @@ def create_app() -> FastAPI:
                     model = ""
 
                 if model:
+                    alias = llm_hub.resolve_alias(model)
+                    if alias:
+                        primary = llm_hub.resolve_model(alias.target)
+                        if primary:
+                            p_provider, p_stripped = primary
+                            p_headers = await p_provider.get_auth_headers()
+                            response = await proxy_request_to_provider(
+                                provider=p_provider,
+                                path=full_path,
+                                request=request,
+                                auth_headers=p_headers,
+                                original_model=model,
+                                stripped_model=p_stripped,
+                                pricing_cache=app.state.pricing_cache,
+                            )
+                            if alias.fallback and isinstance(response, JSONResponse) and response.status_code >= 400:
+                                fb = llm_hub.resolve_model(alias.fallback)
+                                if fb:
+                                    fb_provider, fb_stripped = fb
+                                    fb_headers = await fb_provider.get_auth_headers()
+                                    response = await proxy_request_to_provider(
+                                        provider=fb_provider,
+                                        path=full_path,
+                                        request=request,
+                                        auth_headers=fb_headers,
+                                        original_model=model,
+                                        stripped_model=fb_stripped,
+                                        pricing_cache=app.state.pricing_cache,
+                                    )
+                            return response
+
                     resolved = llm_hub.resolve_model(model)
                     if resolved:
                         provider, stripped_model = resolved

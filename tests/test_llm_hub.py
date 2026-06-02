@@ -4,7 +4,7 @@ import os
 from unittest.mock import AsyncMock, MagicMock
 
 from app.services.llm_hub import LlmHub, LlmProvider
-from app.schemas.provider import LlmProviderConfig, AuthType, AuthConfig
+from app.schemas.provider import LlmProviderConfig, AuthType, AuthConfig, AliasEntry
 
 
 @pytest.fixture
@@ -172,6 +172,76 @@ async def test_provider_get_auth_headers_bearer():
     headers = await provider.get_auth_headers()
     assert headers == {"Authorization": "Bearer bearer-tok"}
     await provider.shutdown()
+
+
+@pytest.fixture
+def hub_with_aliases(provider_dir):
+    aliases = {
+        "smart": {"target": "alpha/model-a", "fallback": "beta/model-x"},
+        "fast":  {"target": "alpha/model-b"},
+    }
+    import pathlib
+    (pathlib.Path(provider_dir) / "aliases.json").write_text(json.dumps(aliases))
+    h = LlmHub()
+    h.load_providers(provider_dir)
+    return h
+
+
+def test_load_aliases(hub_with_aliases):
+    assert "smart" in hub_with_aliases.aliases
+    assert "fast" in hub_with_aliases.aliases
+    assert len(hub_with_aliases.aliases) == 2
+
+
+def test_alias_target_and_fallback(hub_with_aliases):
+    entry = hub_with_aliases.aliases["smart"]
+    assert entry.target == "alpha/model-a"
+    assert entry.fallback == "beta/model-x"
+
+
+def test_alias_no_fallback(hub_with_aliases):
+    entry = hub_with_aliases.aliases["fast"]
+    assert entry.target == "alpha/model-b"
+    assert entry.fallback is None
+
+
+def test_resolve_alias_known(hub_with_aliases):
+    entry = hub_with_aliases.resolve_alias("smart")
+    assert entry is not None
+    assert entry.target == "alpha/model-a"
+
+
+def test_resolve_alias_unknown(hub_with_aliases):
+    assert hub_with_aliases.resolve_alias("unknown-alias") is None
+
+
+def test_aliases_missing_file(provider_dir):
+    """Hub with no aliases.json starts with empty aliases dict."""
+    h = LlmHub()
+    h.load_providers(provider_dir)
+    assert h.aliases == {}
+
+
+def test_aliases_invalid_json(tmp_path):
+    p = {"prefix": "alpha", "base_url": "http://alpha.api/v1", "models": ["m"]}
+    (tmp_path / "alpha.json").write_text(json.dumps(p))
+    (tmp_path / "aliases.json").write_text("not json")
+    h = LlmHub()
+    h.load_providers(str(tmp_path))
+    assert h.aliases == {}
+
+
+def test_example_aliases_file_loads():
+    """The checked-in data/llm_hub/aliases.json must parse without errors."""
+    import pathlib
+    hub_dir = pathlib.Path(__file__).parent.parent / "data" / "llm_hub"
+    h = LlmHub()
+    h.load_providers(str(hub_dir))
+    assert len(h.aliases) > 0
+    for name, entry in h.aliases.items():
+        assert "/" in entry.target, f"alias '{name}' target must be prefix/model"
+        if entry.fallback:
+            assert "/" in entry.fallback, f"alias '{name}' fallback must be prefix/model"
 
 
 @pytest.mark.asyncio

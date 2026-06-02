@@ -1,0 +1,13 @@
+{
+    "smart": {
+        "target": "openrouter/anthropic/claude-sonnet-4-5",
+        "fallback": "openrouter/openai/gpt-4o"
+    },
+    "fast": {
+        "target": "openrouter/openai/gpt-4o-mini",
+        "fallback": "localllm/llama3"
+    },
+    "local": {
+        "target": "localllm/llama3"
+    }
+}
