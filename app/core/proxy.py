@@ -566,7 +566,7 @@ async def _do_proxy_request(
 # Public entry-points (kept for backward-compat with app.py and tests)
 # ---------------------------------------------------------------------------
 
-async def proxy_request_with_retries(client: AsyncClient, path: str, request: Request, custom_headers: dict[str, str] | None = None, pricing_cache=None):
+async def proxy_request_with_retries(client: AsyncClient, path: str, request: Request, custom_headers: dict[str, str] | None = None, pricing_cache=None, body: bytes | None = None):
     custom_headers = custom_headers or {}
     target_url = f"{settings.proxy_target_url}/{path}"
     if request.url.query:
@@ -579,7 +579,8 @@ async def proxy_request_with_retries(client: AsyncClient, path: str, request: Re
         if method.lower() == "post" and headers.get("content-type", "").lower().startswith("multipart/form-data"):
             return await stream_multipart_post(request, client, target_url, headers=headers)
 
-        body = await request.body()
+        if body is None:
+            body = await request.body()
 
         return await _do_proxy_request(
             client=client,

@@ -388,3 +388,66 @@ async def test_alias_no_fallback_returns_primary_error():
         )
 
     assert response.status_code == 503
+
+
+# --- single-provider alias rewrite tests ---
+
+def _mock_proxy_settings():
+    s = MagicMock()
+    s.proxy_target_url = "http://upstream.api"
+    s.proxy_failure_threshold = 3
+    s.proxy_recovery_time = 30
+    s.proxy_window_size = 10
+    s.proxy_exclude_headers = ""
+    s.tracing_enabled = False
+    return s
+
+
+@pytest.mark.asyncio
+async def test_proxy_request_with_retries_alias_rewrite():
+    """proxy_request_with_retries rewrites model name when body override is supplied."""
+    from app.core.proxy import proxy_request_with_retries
+
+    original_body = json.dumps({"model": "smart", "messages": []}).encode()
+    rewritten_body = json.dumps({"model": "gpt-4o", "messages": []}).encode()
+    request = _make_request(body=original_body)
+
+    captured_body = {}
+
+    async def fake_do_proxy(client, target_url, method, headers, body, path, request, pricing_cache=None, **kw):
+        captured_body["value"] = body
+        return JSONResponse(content={"ok": True}, status_code=200)
+
+    mock_client = AsyncMock()
+    with (
+        patch("app.core.proxy.settings", _mock_proxy_settings()),
+        patch("app.core.proxy._do_proxy_request", side_effect=fake_do_proxy),
+    ):
+        await proxy_request_with_retries(mock_client, "v1/chat/completions", request, body=rewritten_body)
+
+    assert captured_body["value"] == rewritten_body
+    assert json.loads(captured_body["value"])["model"] == "gpt-4o"
+
+
+@pytest.mark.asyncio
+async def test_proxy_request_with_retries_no_override_uses_request_body():
+    """proxy_request_with_retries reads body from request when no override given."""
+    from app.core.proxy import proxy_request_with_retries
+
+    original_body = json.dumps({"model": "gpt-4o", "messages": []}).encode()
+    request = _make_request(body=original_body)
+
+    captured_body = {}
+
+    async def fake_do_proxy(client, target_url, method, headers, body, path, request, pricing_cache=None, **kw):
+        captured_body["value"] = body
+        return JSONResponse(content={"ok": True}, status_code=200)
+
+    mock_client = AsyncMock()
+    with (
+        patch("app.core.proxy.settings", _mock_proxy_settings()),
+        patch("app.core.proxy._do_proxy_request", side_effect=fake_do_proxy),
+    ):
+        await proxy_request_with_retries(mock_client, "v1/chat/completions", request)
+
+    assert captured_body["value"] == original_body

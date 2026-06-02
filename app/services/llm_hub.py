@@ -101,6 +101,14 @@ class LlmHub:
 
         self._load_aliases(hub_path)
 
+    def load_aliases(self, directory: str | None = None):
+        """Load aliases.json from *directory* (defaults to llm_hub_directory).
+
+        Safe to call without providers — used by the single-provider path.
+        """
+        hub_path = Path(directory or settings.llm_hub_directory)
+        self._load_aliases(hub_path)
+
     def _load_aliases(self, hub_path: Path):
         aliases_file = hub_path / "aliases.json"
         if not aliases_file.exists():
