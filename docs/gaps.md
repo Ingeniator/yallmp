@@ -10,7 +10,7 @@ Every trace should store: **prompts, tools, retrieved docs, outputs, latency, co
 | # | Attribute       | Status        |
 |---|-----------------|---------------|
 | 1 | prompts         | ⚠️ Conditional |
-| 2 | tools           | ❌ Missing     |
+| 2 | tools           | ✅ Fixed       |
 | 3 | retrieved docs  | ❌ Missing     |
 | 4 | outputs         | ✅ Fixed (streaming) / ⚠️ Conditional (tracing_log_io gate) |
 | 5 | latency         | ✅ Fixed       |
@@ -31,15 +31,15 @@ before the emitter call — prompts silently disappear.
 
 ---
 
-### 2. Tools — ❌ Missing
-Tool definitions (`input_body["tools"]`) and tool calls in the response
-(`choices[0].message.tool_calls`) are never extracted into dedicated fields.
-They may be buried inside `input_body` / `output_body` when `tracing_log_io=True`,
-but are invisible otherwise and never structured.
+### 2. Tools — ✅ Fixed
 
-**Fix:** Extract `input_body.get("tools")` and response tool calls into
-`metadata["tools_defined"]` / `metadata["tool_calls"]`, or create a child observation
-of type `tool` per invocation.
+Tool names from `input_body["tools"]` are extracted into `metadata["tools_defined"]`
+(list of name strings). Tool call names from the response are extracted into
+`metadata["tool_calls"]` — from `choices[n].message.tool_calls` for non-streaming,
+and from `delta.tool_calls[n].function.name` SSE chunks for streaming.
+
+Both fields are populated independently of `tracing_log_io` and are omitted from
+`metadata` when empty (no tools in the request).
 
 ---
 

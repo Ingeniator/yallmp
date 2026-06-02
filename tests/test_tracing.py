@@ -106,6 +106,11 @@ class TestTraceProxyRequest:
             duration_ms=150.5,
             group_id="group-1",
             is_streaming=False,
+            cost=None,
+            session_id=None,
+            trace_id=None,
+            tools_defined=None,
+            tool_calls=None,
         )
 
     def test_strips_io_when_log_io_false(self):
@@ -134,6 +139,35 @@ class TestTraceProxyRequest:
         assert call_kwargs["output_body"] is None
         assert call_kwargs["model"] == "test-model"
         assert call_kwargs["usage"]["total_tokens"] == 8
+
+    def test_tools_pass_through_regardless_of_log_io(self):
+        from app.services.tracing import trace_proxy_request
+
+        mock_emitter = MagicMock()
+
+        with patch("app.services.tracing.get_emitter", return_value=mock_emitter), \
+             patch("app.services.tracing.settings") as mock_settings:
+            mock_settings.tracing_log_io = False  # IO is stripped, tools must survive
+
+            trace_proxy_request(
+                model="test-model",
+                provider=None,
+                input_body={"messages": [], "tools": [{"type": "function", "function": {"name": "fn"}}]},
+                output_body={"choices": []},
+                status_code=200,
+                usage=None,
+                duration_ms=100.0,
+                group_id="group-1",
+                is_streaming=False,
+                tools_defined=["fn"],
+                tool_calls=["fn"],
+            )
+
+        call_kwargs = mock_emitter.trace_proxy_request.call_args[1]
+        assert call_kwargs["input_body"] is None   # IO stripped
+        assert call_kwargs["output_body"] is None  # IO stripped
+        assert call_kwargs["tools_defined"] == ["fn"]
+        assert call_kwargs["tool_calls"] == ["fn"]
 
     def test_handles_emitter_exception_gracefully(self):
         from app.services.tracing import trace_proxy_request
