@@ -89,6 +89,8 @@ class LangfuseEmitter:
         cost: "CostBreakdown | None" = None,
         session_id: str | None = None,
         trace_id: str | None = None,
+        tools_defined: list[str] | None = None,
+        tool_calls: list[str] | None = None,
     ) -> None:
         client = self._get_client(group_id)
 
@@ -108,6 +110,10 @@ class LangfuseEmitter:
             "status_code": status_code,
             "duration_ms": duration_ms,
         }
+        if tools_defined:
+            metadata["tools_defined"] = tools_defined
+        if tool_calls:
+            metadata["tool_calls"] = tool_calls
         cost_details = None
         if cost is not None:
             cost_details = {"input": cost.input, "output": cost.output, "total": cost.total}

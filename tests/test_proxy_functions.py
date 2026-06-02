@@ -8,6 +8,9 @@ from starlette.requests import Request
 import app.core.proxy as proxy_mod
 from app.core.proxy import (
     _parse_model_version,
+    _extract_tools_defined,
+    _extract_tool_calls,
+    _extract_streaming_tool_calls,
     get_model_version,
     proxy_request_with_retries,
     stream_multipart_post,
@@ -398,6 +401,136 @@ async def test_stream_multipart_post_filters_headers():
     assert "x-custom" in forwarded
     for excluded in ("content-length", "transfer-encoding", "connection", "expect", "host"):
         assert excluded not in forwarded
+
+
+# --- _extract_tools_defined ---
+
+
+def test_extract_tools_defined_none():
+    assert _extract_tools_defined(None) == []
+
+
+def test_extract_tools_defined_no_tools_key():
+    assert _extract_tools_defined({"messages": []}) == []
+
+
+def test_extract_tools_defined_empty_list():
+    assert _extract_tools_defined({"tools": []}) == []
+
+
+def test_extract_tools_defined_openai_format():
+    input_body = {
+        "tools": [
+            {"type": "function", "function": {"name": "get_weather", "description": "..."}},
+            {"type": "function", "function": {"name": "search_web"}},
+        ]
+    }
+    assert _extract_tools_defined(input_body) == ["get_weather", "search_web"]
+
+
+def test_extract_tools_defined_skips_malformed():
+    input_body = {
+        "tools": [
+            {"type": "function", "function": {"name": "valid"}},
+            "not-a-dict",
+            {"type": "function", "function": {}},  # missing name
+            {"type": "function"},  # missing function key
+        ]
+    }
+    assert _extract_tools_defined(input_body) == ["valid"]
+
+
+# --- _extract_tool_calls ---
+
+
+def test_extract_tool_calls_empty():
+    assert _extract_tool_calls([]) == []
+
+
+def test_extract_tool_calls_no_tool_calls():
+    choices = [{"message": {"role": "assistant", "content": "hello"}}]
+    assert _extract_tool_calls(choices) == []
+
+
+def test_extract_tool_calls_single():
+    choices = [
+        {
+            "message": {
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+                ]
+            }
+        }
+    ]
+    assert _extract_tool_calls(choices) == ["get_weather"]
+
+
+def test_extract_tool_calls_multiple():
+    choices = [
+        {
+            "message": {
+                "tool_calls": [
+                    {"id": "call_1", "function": {"name": "fn_a", "arguments": "{}"}},
+                    {"id": "call_2", "function": {"name": "fn_b", "arguments": "{}"}},
+                ]
+            }
+        }
+    ]
+    assert _extract_tool_calls(choices) == ["fn_a", "fn_b"]
+
+
+def test_extract_tool_calls_null_tool_calls():
+    choices = [{"message": {"tool_calls": None}}]
+    assert _extract_tool_calls(choices) == []
+
+
+# --- _extract_streaming_tool_calls ---
+
+
+def test_extract_streaming_tool_calls_no_tool_calls():
+    full_text = (
+        'data: {"choices": [{"delta": {"content": "hello"}}]}\n'
+        "data: [DONE]\n"
+    )
+    assert _extract_streaming_tool_calls(full_text) == []
+
+
+def test_extract_streaming_tool_calls_single():
+    full_text = (
+        'data: {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "c1", "function": {"name": "get_weather", "arguments": ""}}]}}]}\n'
+        'data: {"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": "{\\"loc\\": \\"NYC\\"}"}}]}}]}\n'
+        "data: [DONE]\n"
+    )
+    assert _extract_streaming_tool_calls(full_text) == ["get_weather"]
+
+
+def test_extract_streaming_tool_calls_deduplicates():
+    # Same name appearing in multiple chunks (argument fragments) — should appear once
+    full_text = (
+        'data: {"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"name": "fn_x", "arguments": ""}}]}}]}\n'
+        'data: {"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"name": "fn_x", "arguments": "end"}}]}}]}\n'
+        "data: [DONE]\n"
+    )
+    assert _extract_streaming_tool_calls(full_text) == ["fn_x"]
+
+
+def test_extract_streaming_tool_calls_multiple_distinct():
+    full_text = (
+        'data: {"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"name": "fn_a", "arguments": ""}}]}}]}\n'
+        'data: {"choices": [{"delta": {"tool_calls": [{"index": 1, "function": {"name": "fn_b", "arguments": ""}}]}}]}\n'
+        "data: [DONE]\n"
+    )
+    result = _extract_streaming_tool_calls(full_text)
+    assert result == ["fn_a", "fn_b"]
+
+
+def test_extract_streaming_tool_calls_skips_malformed_lines():
+    full_text = (
+        "data: not-valid-json\n"
+        'data: {"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"name": "ok"}}]}}]}\n'
+        "data: [DONE]\n"
+    )
+    assert _extract_streaming_tool_calls(full_text) == ["ok"]
 
 
 # --- proxy_request_with_retries: multipart branch ---

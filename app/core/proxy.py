@@ -347,6 +347,50 @@ def _detect_streaming(method: str, body: bytes) -> bool:
     return False
 
 
+def _extract_tools_defined(input_body: dict | None) -> list[str]:
+    if not input_body:
+        return []
+    names = []
+    for t in input_body.get("tools", []):
+        if not isinstance(t, dict):
+            continue
+        fn = t.get("function", {})
+        name = fn.get("name") if isinstance(fn, dict) else None
+        if name:
+            names.append(name)
+    return names
+
+
+def _extract_tool_calls(choices: list) -> list[str]:
+    names = []
+    for choice in choices:
+        for tc in choice.get("message", {}).get("tool_calls", []) or []:
+            name = tc.get("function", {}).get("name")
+            if name:
+                names.append(name)
+    return names
+
+
+def _extract_streaming_tool_calls(full_text: str) -> list[str]:
+    seen: set[str] = set()
+    names: list[str] = []
+    for line in full_text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("data:") or stripped == "data: [DONE]":
+            continue
+        try:
+            payload = json.loads(stripped[len("data:"):].strip())
+        except (json.JSONDecodeError, ValueError):
+            continue
+        for choice in payload.get("choices", []):
+            for tc in choice.get("delta", {}).get("tool_calls", []) or []:
+                name = tc.get("function", {}).get("name")
+                if name and name not in seen:
+                    seen.add(name)
+                    names.append(name)
+    return names
+
+
 def _emit_completions_metrics(
     response_data: dict,
     request: Request,
@@ -421,6 +465,8 @@ def _emit_completions_metrics(
         cost=cost,
         session_id=request.headers.get("x-session-id"),
         trace_id=request.headers.get("x-request-id"),
+        tools_defined=_extract_tools_defined(input_body),
+        tool_calls=_extract_tool_calls(response_data.get("choices", [])),
     )
 
     if cost is not None and settings.billing_enabled:
@@ -746,6 +792,8 @@ def _emit_streaming_metrics(
                 cost=cost,
                 session_id=request.headers.get("x-session-id"),
                 trace_id=request.headers.get("x-request-id"),
+                tools_defined=_extract_tools_defined(input_body),
+                tool_calls=_extract_streaming_tool_calls(full_text),
             )
 
             if cost is not None and settings.billing_enabled:
