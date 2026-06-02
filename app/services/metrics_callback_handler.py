@@ -26,6 +26,16 @@ llm_cost = Counter(
     'Total estimated cost in provider currency',
     ["provider", "currency", "model", "group_id"]
 )
+llm_input_cost = Counter(
+    'llm_input_cost',
+    'Estimated input (prompt) cost in provider currency',
+    ["provider", "currency", "model", "group_id"]
+)
+llm_output_cost = Counter(
+    'llm_output_cost',
+    'Estimated output (completion) cost in provider currency',
+    ["provider", "currency", "model", "group_id"]
+)
 
 # Business metrics
 llm_requests_total = Counter(
@@ -33,6 +43,25 @@ llm_requests_total = Counter(
     'Total LLM completion requests',
     ["model", "provider", "group_id"]
 )
+
+# Search metrics
+search_requests_total = Counter(
+    'search_requests_total',
+    'Total search requests',
+    ["provider", "group_id"]
+)
+search_cost_total = Counter(
+    'search_cost_total',
+    'Total search cost in USD',
+    ["provider", "group_id"]
+)
+
+
+def record_search(provider: str, group_id: str, cost: float | None = None) -> None:
+    """Increment search Prometheus counters. Call once per search request."""
+    search_requests_total.labels(provider=provider, group_id=group_id).inc()
+    if cost:
+        search_cost_total.labels(provider=provider, group_id=group_id).inc(cost)
 
 
 class MetricsCallbackHandler(BaseCallbackHandler):
@@ -95,9 +124,12 @@ class MetricsCallbackHandler(BaseCallbackHandler):
                 self.provider_prefix, pricing_model, prompt_token_usage, completion_token_usage,
             )
             if cost is not None:
-                llm_cost.labels(
+                cost_labels = dict(
                     provider=self.provider_prefix,
                     currency=self.currency,
                     model=model_name,
                     group_id=group_id,
-                ).inc(cost)
+                )
+                llm_cost.labels(**cost_labels).inc(cost.total)
+                llm_input_cost.labels(**cost_labels).inc(cost.input)
+                llm_output_cost.labels(**cost_labels).inc(cost.output)

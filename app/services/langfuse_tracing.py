@@ -1,9 +1,23 @@
 from __future__ import annotations
 
+import json
 from collections import OrderedDict
+from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING
+
+import opentelemetry.trace as otel_trace_api
+from langfuse import Langfuse, LangfuseGeneration, LangfuseSpan, propagate_attributes
+from langfuse._client.attributes import LangfuseOtelSpanAttributes
 
 from app.core.config import settings
 from app.core.logging_config import setup_logging
+
+if TYPE_CHECKING:
+    from app.services.pricing import CostBreakdown
+
+# Langfuse internal attribute: tells the backend to render this span as a root trace
+# even though it carries a remote parent context (needed for trace_id stitching).
+_LANGFUSE_AS_ROOT_ATTR = "langfuse.internal.as_root"
 
 logger = setup_logging()
 
@@ -72,8 +86,9 @@ class LangfuseEmitter:
         duration_ms: float,
         group_id: str,
         is_streaming: bool,
-        cost: float | None = None,
+        cost: "CostBreakdown | None" = None,
         session_id: str | None = None,
+        trace_id: str | None = None,
     ) -> None:
         client = self._get_client(group_id)
 
@@ -93,29 +108,159 @@ class LangfuseEmitter:
             "status_code": status_code,
             "duration_ms": duration_ms,
         }
-        if session_id:
-            metadata["session_id"] = session_id
+        cost_details = None
+        if cost is not None:
+            cost_details = {"input": cost.input, "output": cost.output, "total": cost.total}
+            metadata["cost"] = cost.total
+            metadata["input_cost"] = cost.input
+            metadata["output_cost"] = cost.output
 
+        trace_name = model or "llm-proxy"
+        valid_trace_id = Langfuse.create_trace_id(seed=trace_id) if trace_id else None
+
+        end_time = datetime.now(timezone.utc)
+        start_time = end_time - timedelta(milliseconds=duration_ms)
+        # OTEL span timestamps are nanoseconds since epoch
+        start_time_ns = int(start_time.timestamp() * 1e9)
+        end_time_ns = int(end_time.timestamp() * 1e9)
+
+        # When we have a trace_id we need to stitch this span into the right Langfuse
+        # trace.  Langfuse does this by creating a NonRecordingSpan carrying the desired
+        # trace_id, then using it as the OTEL parent context.  We replicate that here so
+        # we can still pass start_time/end_time to the raw OTEL tracer — the Langfuse v4
+        # public API (start_as_current_observation) no longer exposes those params.
+        otel_context = None
+        if valid_trace_id:
+            remote_parent = client._create_remote_parent_span(
+                trace_id=valid_trace_id, parent_span_id=None
+            )
+            otel_context = otel_trace_api.set_span_in_context(remote_parent)
+
+        with propagate_attributes(session_id=session_id or None):
+            with client._otel_tracer.start_as_current_span(
+                name=trace_name,
+                context=otel_context,   # None → use ambient OTEL context
+                start_time=start_time_ns,
+                end_on_exit=False,      # we call end() ourselves with the correct ns
+            ) as otel_span:
+                if valid_trace_id:
+                    # Mirror what Langfuse sets in _create_span_with_parent_context so the
+                    # backend renders this as a root-level trace, not a dangling child.
+                    otel_span.set_attribute(_LANGFUSE_AS_ROOT_ATTR, True)
+                gen = LangfuseGeneration(
+                    otel_span=otel_span,
+                    langfuse_client=client,
+                    environment=getattr(client, "_environment", None),
+                    release=getattr(client, "_release", None),
+                    input=input_body,
+                    output=output_body,
+                    metadata=metadata,
+                    usage_details=usage_details or None,
+                    cost_details=cost_details,
+                    completion_start_time=start_time,
+                    model=model,
+                )
+                gen.end(end_time=end_time_ns)  # → otel_span.end(end_time=ns) internally
+
+    def trace_search_request(
+        self,
+        provider: str,
+        query: str,
+        num_results: int,
+        result_count: int,
+        status_code: int,
+        duration_ms: float,
+        group_id: str,
+        cost: float | None = None,
+        trace_id: str | None = None,
+        session_id: str | None = None,
+    ) -> None:
+        client = self._get_client(group_id)
+
+        metadata = {
+            "provider": provider,
+            "group_id": group_id,
+            "status_code": status_code,
+            "duration_ms": duration_ms,
+            "num_results_requested": num_results,
+            "num_results_returned": result_count,
+        }
         cost_details = None
         if cost is not None:
             cost_details = {"total": cost}
             metadata["cost"] = cost
 
-        trace_name = model or "llm-proxy"
-        with client.start_as_current_observation(
-            name=trace_name,
-            as_type="generation",
-            model=model,
-            input=input_body,
-            output=output_body,
-            metadata=metadata,
-            usage_details=usage_details or None,
-            cost_details=cost_details,
-        ):
-            if session_id:
-                from langfuse import propagate_attributes
-                with propagate_attributes(session_id=session_id):
-                    pass
+        valid_trace_id = Langfuse.create_trace_id(seed=trace_id) if trace_id else None
+
+        end_time = datetime.now(timezone.utc)
+        start_time = end_time - timedelta(milliseconds=duration_ms)
+        start_time_ns = int(start_time.timestamp() * 1e9)
+        end_time_ns = int(end_time.timestamp() * 1e9)
+
+        otel_context = None
+        if valid_trace_id:
+            remote_parent = client._create_remote_parent_span(
+                trace_id=valid_trace_id, parent_span_id=None
+            )
+            otel_context = otel_trace_api.set_span_in_context(remote_parent)
+
+        with propagate_attributes(session_id=session_id or None):
+            with client._otel_tracer.start_as_current_span(
+                name=f"search:{provider}",
+                context=otel_context,
+                start_time=start_time_ns,
+                end_on_exit=False,
+            ) as otel_span:
+                if valid_trace_id:
+                    otel_span.set_attribute(_LANGFUSE_AS_ROOT_ATTR, True)
+                span = LangfuseSpan(
+                    otel_span=otel_span,
+                    langfuse_client=client,
+                    environment=getattr(client, "_environment", None),
+                    release=getattr(client, "_release", None),
+                    input={"query": query} if query is not None else None,
+                    output={"result_count": result_count},
+                    metadata=metadata,
+                )
+                # LangfuseSpan constructor doesn't accept usage_details / cost_details
+                # (those are generation-only params). Set the underlying OTEL attributes
+                # directly — same JSON encoding that create_generation_attributes uses.
+                otel_span.set_attribute(
+                    LangfuseOtelSpanAttributes.OBSERVATION_USAGE_DETAILS,
+                    json.dumps({"total": 1, "unit": "SEARCHES"}),
+                )
+                if cost_details:
+                    otel_span.set_attribute(
+                        LangfuseOtelSpanAttributes.OBSERVATION_COST_DETAILS,
+                        json.dumps(cost_details),
+                    )
+                span.end(end_time=end_time_ns)
+
+    async def score(
+        self,
+        trace_id: str,
+        name: str,
+        value: float,
+        comment: str | None,
+        group_id: str,
+    ) -> None:
+        """Submit a score via the Langfuse REST API (POST /api/public/scores)."""
+        import httpx
+
+        pk = group_id if group_id and group_id != "unknown" else self._public_key
+        sk = group_id if group_id and group_id != "unknown" else self._secret_key
+
+        payload: dict = {"traceId": trace_id, "name": name, "value": value}
+        if comment:
+            payload["comment"] = comment
+
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                f"{self._host.rstrip('/')}/api/public/scores",
+                json=payload,
+                auth=(pk, sk),
+            )
+            resp.raise_for_status()
 
     def get_langchain_callback(self, trace_name: str, metadata: dict) -> object | None:
         try:

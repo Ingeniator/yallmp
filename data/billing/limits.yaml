@@ -1,0 +1,15 @@
+tiers:
+  tier1:
+    period: month
+    group_limit: 100.0
+    user_limit: 10.0
+    alert_threshold: 0.8
+  tier_unlimited:
+    period: month
+    group_limit: 999999.0
+    user_limit: 999999.0
+    alert_threshold: 1.0
+
+orgs:
+  default: tier1
+  unknown: tier1

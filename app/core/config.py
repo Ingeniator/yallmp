@@ -98,6 +98,18 @@ class AppSettings(BaseSettings):
     chain_default_available_chat_models: list[str] = ["Gigachat:latest", "GigaChat-Pro", "GigaChat-Max", "Gigachat-2:latest", "DeepSeek-R1"]
     chain_default_json_file: str = "./data/langchain/default.json"
 
+    # Dev role switcher (docker-compose only — never enable in production)
+    dashboard_dev_role_switcher: bool = False
+
+    # Search Hub
+    search_hub_enabled: bool = False
+    search_hub_directory: str = "data/search_hub"
+
+    # Billing
+    billing_enabled: bool = False
+    billing_redis_url: str = "redis://redis:6379/0"
+    billing_limits_path: str = "data/billing/limits.yaml"
+
     version: str = "0.1.0"
     
     model_config = SettingsConfigDict(env_prefix="LLM_", env_file=".env", env_file_encoding="utf-8", extra='allow')

@@ -18,20 +18,23 @@ dependencies = [
     "structlog>=25.2.0",
     "uvicorn>=0.34.0",
     "aiofiles",
-    "langfuse>=4.0.0"
+    "langfuse>=4.0.0",
+    "redis[hiredis]>=5.0",
 ]
 
 [dependency-groups]
 dev = [
     "commitizen>=4.4.1",
-    "pre-commit>=4.1.0",
-    "ruff>=0.9.10",
-    "pytest>=8.0",
-    "pytest-asyncio>=0.25",
-    "httpx>=0.28",
-    "pytest-cov==5.0.0",
-    "coverage==5.2.1"
+ "pre-commit>=4.1.0",
+ "ruff>=0.9.10",
+ "pytest>=8.0",
+ "pytest-asyncio>=0.25",
+ "httpx>=0.28",
+ "pytest-cov>=7.0.0",
 ]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
 
 [tool.commitizen]
 name = "cz_conventional_commits"

@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.schemas.provider import LlmProviderConfig, PricingInfo
-from app.services.pricing import PricingCache
+from app.services.pricing import CostBreakdown, PricingCache
 from app.services.metrics_callback_handler import MetricsCallbackHandler
 from app.schemas.prompt import ChainMetadataForTracking, ChainType
 
@@ -70,7 +70,10 @@ def test_get_cost_returns_correct_value():
     }
 
     cost = cache.get_cost("test", "my-model", prompt_tokens=100, completion_tokens=50)
-    assert cost == pytest.approx(0.001 * 100 + 0.002 * 50)
+    assert isinstance(cost, CostBreakdown)
+    assert cost.input == pytest.approx(0.001 * 100)
+    assert cost.output == pytest.approx(0.002 * 50)
+    assert cost.total == pytest.approx(0.001 * 100 + 0.002 * 50)
 
 
 def test_get_cost_unknown_provider():
@@ -168,13 +171,15 @@ async def test_refresh_updates_last_refresh_time():
 # MetricsCallbackHandler – cost counter
 # ---------------------------------------------------------------------------
 
+@patch("app.services.metrics_callback_handler.llm_output_cost")
+@patch("app.services.metrics_callback_handler.llm_input_cost")
 @patch("app.services.metrics_callback_handler.llm_cost")
 @patch("app.services.metrics_callback_handler.total_token_usage_counter")
 @patch("app.services.metrics_callback_handler.prompt_token_usage_counter")
 @patch("app.services.metrics_callback_handler.completion_token_usage_counter")
-def test_handler_increments_cost_counter(comp_c, prompt_c, total_c, cost_counter):
+def test_handler_increments_cost_counter(comp_c, prompt_c, total_c, cost_counter, inp_cost_c, out_cost_c):
     pricing_cache = MagicMock()
-    pricing_cache.get_cost.return_value = 0.42
+    pricing_cache.get_cost.return_value = CostBreakdown(input=0.10, output=0.32, total=0.42)
 
     metadata = ChainMetadataForTracking(
         chain_type=ChainType.prompt, chain_name="proxy", group_id="g1"
@@ -193,10 +198,13 @@ def test_handler_increments_cost_counter(comp_c, prompt_c, total_c, cost_counter
     handler.on_llm_end(response)
 
     pricing_cache.get_cost.assert_called_once_with("openrouter", "gpt-4", 100, 50)
-    cost_counter.labels.assert_called_with(
-        provider="openrouter", currency="USD", model="gpt-4", group_id="g1"
-    )
+    cost_labels = dict(provider="openrouter", currency="USD", model="gpt-4", group_id="g1")
+    cost_counter.labels.assert_called_with(**cost_labels)
     cost_counter.labels.return_value.inc.assert_called_with(0.42)
+    inp_cost_c.labels.assert_called_with(**cost_labels)
+    inp_cost_c.labels.return_value.inc.assert_called_with(0.10)
+    out_cost_c.labels.assert_called_with(**cost_labels)
+    out_cost_c.labels.return_value.inc.assert_called_with(0.32)
 
 
 @patch("app.services.metrics_callback_handler.llm_cost")
@@ -223,7 +231,7 @@ def test_handler_skips_cost_when_no_pricing(comp_c, prompt_c, total_c, cost_coun
 def test_handler_uses_request_model_for_pricing(comp_c, prompt_c, total_c, cost_counter):
     """Cost lookup uses the request model name, not the versioned response model."""
     pricing_cache = MagicMock()
-    pricing_cache.get_cost.return_value = 1.5
+    pricing_cache.get_cost.return_value = CostBreakdown(input=0.5, output=1.0, total=1.5)
 
     metadata = ChainMetadataForTracking(
         chain_type=ChainType.prompt, chain_name="proxy", group_id="g1"
@@ -253,7 +261,7 @@ def test_handler_uses_request_model_for_pricing(comp_c, prompt_c, total_c, cost_
 def test_handler_falls_back_to_response_model_when_no_request_model(comp_c, prompt_c, total_c, cost_counter):
     """When request_model is not set, falls back to response model name."""
     pricing_cache = MagicMock()
-    pricing_cache.get_cost.return_value = 0.5
+    pricing_cache.get_cost.return_value = CostBreakdown(input=0.2, output=0.3, total=0.5)
 
     metadata = ChainMetadataForTracking(
         chain_type=ChainType.prompt, chain_name="proxy", group_id="g1"
@@ -282,7 +290,7 @@ def test_handler_falls_back_to_response_model_when_no_request_model(comp_c, prom
 def test_handler_cost_works_with_empty_provider_prefix(comp_c, prompt_c, total_c, cost_counter):
     """Empty string provider prefix should still trigger cost calculation."""
     pricing_cache = MagicMock()
-    pricing_cache.get_cost.return_value = 0.99
+    pricing_cache.get_cost.return_value = CostBreakdown(input=0.44, output=0.55, total=0.99)
 
     metadata = ChainMetadataForTracking(
         chain_type=ChainType.prompt, chain_name="proxy", group_id="g1"

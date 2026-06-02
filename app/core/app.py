@@ -54,10 +54,36 @@ async def lifespan(app: FastAPI):
 
     app.state.pricing_cache = pricing_cache
 
+    # Initialize Search Hub if enabled
+    search_hub = None
+    if settings.search_hub_enabled:
+        from app.services.search_hub import SearchHub
+        search_hub = SearchHub()
+        search_hub.load_providers()
+        await search_hub.startup()
+
+    app.state.search_hub = search_hub
+
+    # Initialize billing Redis + limits
+    app.state.billing_redis = None
+    app.state.billing_limits = {}
+    if settings.billing_enabled:
+        import redis.asyncio as aioredis
+        from app.services.billing import load_limits
+        app.state.billing_redis = aioredis.from_url(settings.billing_redis_url, decode_responses=True)
+        app.state.billing_limits = load_limits(settings.billing_limits_path)
+        logger.info("Billing enabled", redis_url=settings.billing_redis_url)
+
     yield
 
     if pricing_cache:
         await pricing_cache.shutdown()
+
+    if app.state.billing_redis:
+        await app.state.billing_redis.aclose()
+
+    if search_hub:
+        await search_hub.shutdown()
 
     from app.services.tracing import shutdown as tracing_shutdown
     tracing_shutdown()
@@ -81,6 +107,9 @@ def create_app() -> FastAPI:
     )
     # Add Logging Middleware
     app.add_middleware(LoggingMiddleware)
+    # Add Billing Middleware (limit enforcement, runs before Prometheus)
+    from app.middlewares.billing_middleware import BillingMiddleware
+    app.add_middleware(BillingMiddleware)
     # Add Prometheus middleware
     app.add_middleware(PrometheusMiddleware)
 
@@ -106,6 +135,7 @@ def create_app() -> FastAPI:
             "chain_hub": "ok" if settings.chain_hub_enabled else "disabled",
             "prompt_hub": "ok" if settings.prompt_hub_enabled else "disabled",
             "dashboard": "ok" if settings.dashboard_enabled else "disabled",
+            "search_hub": "ok" if settings.search_hub_enabled else "disabled",
         }
 
         if settings.proxy_enabled:
@@ -119,6 +149,14 @@ def create_app() -> FastAPI:
                 cb = await provider.circuit_breaker.get_status()
                 if cb["circuit_open"]:
                     components["llm_hub"] = "degraded"
+                    break
+
+        search_hub_state = getattr(app.state, "search_hub", None)
+        if settings.search_hub_enabled and search_hub_state and search_hub_state.providers:
+            for name, sp in search_hub_state.providers.items():
+                cb = await sp.circuit_breaker.get_status()
+                if cb["circuit_open"]:
+                    components["search_hub"] = "degraded"
                     break
 
         enabled = {k: v for k, v in components.items() if v != "disabled"}
@@ -137,6 +175,7 @@ def create_app() -> FastAPI:
             "chain_hub": "ok" if settings.chain_hub_enabled else "disabled",
             "prompt_hub": "ok" if settings.prompt_hub_enabled else "disabled",
             "dashboard": "ok" if settings.dashboard_enabled else "disabled",
+            "search_hub": "ok" if settings.search_hub_enabled else "disabled",
             "tracing": "ok" if settings.tracing_enabled else "disabled",
         }
 
@@ -166,6 +205,17 @@ def create_app() -> FastAPI:
                 else:
                     components["llm_hub"] = "degraded"
                 details["llm_hub_providers"] = provider_statuses
+
+        # Check Search Hub provider circuit breakers
+        search_hub_state = getattr(app.state, "search_hub", None)
+        if settings.search_hub_enabled and search_hub_state and search_hub_state.providers:
+            search_statuses = {}
+            for name, sp in search_hub_state.providers.items():
+                cb = await sp.circuit_breaker.get_status()
+                search_statuses[name] = "circuit_open" if cb["circuit_open"] else "ok"
+            if any(v != "ok" for v in search_statuses.values()):
+                components["search_hub"] = "degraded"
+                details["search_hub_providers"] = search_statuses
 
         # Check tracing backend reachability
         if settings.tracing_enabled:
@@ -197,14 +247,33 @@ def create_app() -> FastAPI:
 
     if settings.dashboard_enabled:
         from app.services.dashboard import get_dashboard_json
+        from app.core.security import sanitize_group_id
 
         _dashboard_html = pathlib.Path(__file__).resolve().parent.parent.joinpath(
             "templates", "dashboard.html"
         ).read_text()
 
+        def _effective_identity(request: Request) -> tuple[str, str]:
+            """Return (role, group_id), applying dev cookie override when enabled."""
+            role = request.headers.get("x-role", "").upper()
+            group_id = sanitize_group_id(request.headers.get("x-group-id", ""))
+            if settings.dashboard_dev_role_switcher:
+                from urllib.parse import unquote
+                cookie_role = request.cookies.get("dev_role", "").upper()
+                cookie_group = unquote(request.cookies.get("dev_group", ""))
+                if cookie_role:
+                    role = cookie_role
+                if cookie_group:
+                    group_id = sanitize_group_id(cookie_group)
+            return role, group_id
+
         @app.get("/dashboard")
         async def dashboard():
             return HTMLResponse(content=_dashboard_html)
+
+        @app.get("/dashboard/api/config")
+        async def dashboard_api_config():
+            return {"dev_switcher": settings.dashboard_dev_role_switcher}
 
         @app.get("/dashboard/api/metrics")
         async def dashboard_api_metrics(
@@ -213,16 +282,111 @@ def create_app() -> FastAPI:
             start: str = "",
             end: str = "",
         ):
-            group_id = request.headers.get("x-group-id")
-            role = request.headers.get("x-role", "").upper()
-            is_org_admin = role == "ORG_ADMIN"
-            is_super_admin = role == "SUPER_ADMIN"
+            role, group_id = _effective_identity(request)
             return await get_dashboard_json(
-                group_id=group_id, is_org_admin=is_org_admin,
-                is_super_admin=is_super_admin,
+                group_id=group_id,
+                is_org_admin=role == "ORG_ADMIN",
+                is_super_admin=role == "SUPER_ADMIN",
                 time_window=time_window, start=start, end=end,
             )
 
+        @app.get("/dashboard/api/billing")
+        async def dashboard_api_billing(request: Request):
+            from app.services.billing import get_billing_summary
+            role, group_id = _effective_identity(request)
+            redis = getattr(request.app.state, "billing_redis", None)
+            limits = getattr(request.app.state, "billing_limits", {})
+            if not redis or not settings.billing_enabled:
+                return {"enabled": False}
+            return await get_billing_summary(redis, limits, group_id, role)
+
+        @app.get("/dashboard/api/trends")
+        async def dashboard_api_trends(
+            request: Request,
+            time_window: str = "7d",
+            group_by: str = "group_id",
+            start: str = "",
+            end: str = "",
+        ):
+            if settings.dashboard_metrics_backend != "prometheus":
+                return {"available": False, "labels": [], "series": []}
+            from app.services.dashboard_prometheus import fetch_cost_trends
+            role, group_id = _effective_identity(request)
+            prom_auth = None
+            if settings.dashboard_prometheus_user:
+                prom_auth = (settings.dashboard_prometheus_user, settings.dashboard_prometheus_password)
+            prom_verify = (
+                settings.dashboard_prometheus_ca_bundle
+                if settings.dashboard_prometheus_ca_bundle
+                else settings.dashboard_prometheus_verify_ssl
+            )
+            return await fetch_cost_trends(
+                url=settings.dashboard_prometheus_url,
+                timeout=settings.dashboard_prometheus_timeout,
+                group_id=group_id,
+                is_org_admin=role == "ORG_ADMIN",
+                is_super_admin=role == "SUPER_ADMIN",
+                auth=prom_auth,
+                verify=prom_verify,
+                time_window=time_window,
+                group_by=group_by,
+                start=start,
+                end=end,
+            )
+
+        @app.get("/dashboard/api/who")
+        async def dashboard_api_who(request: Request):
+            role, group_id = _effective_identity(request)
+            if not role:
+                role = "USER"
+            org = group_id.split("/")[0] if group_id else ""
+            return {"role": role, "group_id": group_id, "org": org}
+
+        @app.get("/dashboard/api/sessions")
+        async def dashboard_api_sessions(
+            request: Request,
+            start: str = "",
+            end: str = "",
+            limit: int = 50,
+            offset: int = 0,
+        ):
+            if not settings.tracing_host:
+                return {"sessions": []}
+            import httpx as _httpx
+            role, group_id = _effective_identity(request)
+            params = {"limit": limit, "offset": offset}
+            if start:
+                params["start"] = start
+            if end:
+                params["end"] = end
+            try:
+                async with _httpx.AsyncClient(timeout=30) as client:
+                    resp = await client.get(
+                        f"{settings.tracing_host.rstrip('/')}/api/public/sessions",
+                        params=params,
+                        headers={"x-group-id": group_id, "x-role": role},
+                    )
+                    resp.raise_for_status()
+                    return resp.json()
+            except Exception as exc:
+                return {"sessions": [], "error": str(exc)}
+
+        @app.get("/dashboard/api/sessions/{session_id}")
+        async def dashboard_api_session_traces(session_id: str, request: Request):
+            if not settings.tracing_host:
+                return {"session_id": session_id, "traces": []}
+            import httpx as _httpx
+            role, group_id = _effective_identity(request)
+            try:
+                async with _httpx.AsyncClient(timeout=30) as client:
+                    resp = await client.get(
+                        f"{settings.tracing_host.rstrip('/')}/api/public/sessions/{session_id}",
+                        headers={"x-group-id": group_id, "x-role": role},
+                    )
+                    resp.raise_for_status()
+                    return resp.json()
+            except Exception as exc:
+                return {"session_id": session_id, "traces": [], "error": str(exc)}
 
     if settings.proxy_enabled:
         from app.core.proxy import proxy_request_with_retries, get_model_version, proxy_request_to_provider
@@ -275,6 +439,30 @@ def create_app() -> FastAPI:
             # Legacy single-provider path
             return await proxy_request_with_retries(app.state.client, full_path, request, custom_headers, pricing_cache=app.state.pricing_cache)
 
+    from app.schemas.feedback import FeedbackRequest, FeedbackResponse
+    from app.services.tracing import score_trace
+
+    @app.post("/v1/feedback", response_model=FeedbackResponse)
+    async def submit_feedback(body: FeedbackRequest, request: Request):
+        """Attach user feedback to a previous LLM request trace.
+
+        Pass the same X-Request-ID (and X-Group-ID) that were sent with the
+        original LLM call. The trace_id is derived deterministically so no
+        server-side state is required between the request and the feedback.
+        """
+        if not settings.tracing_enabled:
+            return JSONResponse(status_code=503, content={"detail": "tracing is disabled"})
+
+        group_id = request.headers.get("x-group-id", "unknown")
+        trace_id = await score_trace(
+            request_id=body.request_id,
+            name=body.name,
+            value=body.score,
+            comment=body.comment,
+            group_id=group_id,
+        )
+        return FeedbackResponse(status="ok", trace_id=trace_id)
+
     if settings.prompt_hub_enabled:
         from app.services.prompt_manager import get_prompt_store
         from app.schemas.prompt import PromptVariables as _PromptVars
@@ -306,5 +494,81 @@ def create_app() -> FastAPI:
             prompt = await get_prompt_store().format_prompt(name, data)
             metadata = ChainMetadataForTracking(chain_type=ChainType.prompt, chain_name = name, group_id = request.headers.get("x-group-id", "unknown"))
             return await get_chain_store().execute_prompt(prompt=prompt, model_name=model_name, metadata=metadata)
+
+    if settings.search_hub_enabled:
+        import time as _time
+        from app.schemas.search import SearchRequest as _SearchRequest, SearchResponse as _SearchResponse
+        from app.services.tracing import trace_search_request as _trace_search
+
+        @app.post("/search", response_model=_SearchResponse)
+        async def search(body: _SearchRequest, request: Request):
+            """Execute a search query via the configured search provider.
+
+            Use the ``provider`` field to override the default provider.
+            Pass ``X-Group-ID`` and ``X-Request-ID`` headers for tracing and billing.
+            """
+            from app.services.metrics_callback_handler import record_search as _record_search
+
+            hub = request.app.state.search_hub
+            provider = hub.resolve(body.provider)
+
+            group_id  = request.headers.get("x-group-id", "unknown")
+            trace_id  = request.headers.get("x-request-id")
+            session_id = request.headers.get("x-session-id")
+
+            start = _time.time()
+            response = await provider.search(body)
+            duration_ms = (_time.time() - start) * 1000
+
+            cost = provider.config.cost_per_search or None
+
+            _record_search(provider=provider.config.name, group_id=group_id, cost=cost)
+
+            _trace_search(
+                provider=provider.config.name,
+                query=body.query,
+                num_results=body.num_results,
+                result_count=len(response.results),
+                status_code=200,
+                duration_ms=duration_ms,
+                group_id=group_id,
+                cost=cost,
+                trace_id=trace_id,
+                session_id=session_id,
+            )
+
+            if cost and settings.billing_enabled:
+                import asyncio as _asyncio
+                billing_redis = getattr(request.app.state, "billing_redis", None)
+                billing_limits = getattr(request.app.state, "billing_limits", {})
+                if billing_redis:
+                    from app.services.billing import charge as _charge
+                    _asyncio.create_task(_charge(billing_redis, billing_limits, group_id, cost))
+
+            return response
+
+        @app.get("/search/providers")
+        async def list_search_providers(request: Request):
+            """List all configured search providers."""
+            hub = request.app.state.search_hub
+            return {
+                "providers": [
+                    {
+                        "name": p.config.name,
+                        "type": p.config.type,
+                        "default": p.config.name == hub._default,
+                    }
+                    for p in hub.providers.values()
+                ]
+            }
+
+        _search_html = pathlib.Path(__file__).resolve().parent.parent.joinpath(
+            "templates", "search.html"
+        ).read_text()
+
+        @app.get("/search/ui")
+        async def search_ui():
+            """Search playground — interactive UI for testing search providers."""
+            return HTMLResponse(content=_search_html)
 
     return app

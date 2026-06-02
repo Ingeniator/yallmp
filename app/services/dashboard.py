@@ -72,6 +72,9 @@ def parse_metrics_to_dict(registry):
     http_duration = []
     cost = []
 
+    search_requests = []
+    search_cost = []
+
     for family in text_string_to_metric_families(raw):
         for sample in family.samples:
             name = sample.name
@@ -88,12 +91,18 @@ def parse_metrics_to_dict(registry):
             elif name.startswith("http_request_duration_seconds"):
                 suffix = name.replace("http_request_duration_seconds_", "")
                 http_duration.append({"stat": suffix, "value": value, **labels})
+            elif name == "search_requests_total":
+                search_requests.append({"value": value, **labels})
+            elif name == "search_cost_total":
+                search_cost.append({"value": value, **labels})
 
     return {
         "token_usage": token_usage,
         "http_requests": http_requests,
         "http_duration": http_duration,
         "cost": cost,
+        "search_requests": search_requests,
+        "search_cost": search_cost,
     }
 
 
@@ -211,6 +220,8 @@ async def get_dashboard_json(group_id=None, is_org_admin=False, is_super_admin=F
         filtered_cost = data["cost"]
         filtered_requests = data["http_requests"]
         filtered_duration = data["http_duration"]
+        filtered_search_requests = data.get("search_requests", [])
+        filtered_search_cost = data.get("search_cost", [])
     else:
         # Local mode (existing behavior)
         data = parse_metrics_to_dict(registry or REGISTRY)
@@ -218,6 +229,8 @@ async def get_dashboard_json(group_id=None, is_org_admin=False, is_super_admin=F
         filtered_duration = _filter_by_group(_filter_by_endpoint(data["http_duration"], patterns), group_id, is_org_admin, is_super_admin)
         filtered_tokens = _filter_by_group(data["token_usage"], group_id, is_org_admin, is_super_admin)
         filtered_cost = _filter_by_group(data["cost"], group_id, is_org_admin, is_super_admin)
+        filtered_search_requests = _filter_by_group(data.get("search_requests", []), group_id, is_org_admin, is_super_admin)
+        filtered_search_cost = _filter_by_group(data.get("search_cost", []), group_id, is_org_admin, is_super_admin)
 
     # Shared aggregation for both backends
     summary = {
@@ -229,12 +242,17 @@ async def get_dashboard_json(group_id=None, is_org_admin=False, is_super_admin=F
         "cost_by_model": _aggregate_cost_by("model", filtered_cost),
         "cost_by_provider": _aggregate_cost_by("provider", filtered_cost),
         "cost_by_group": _aggregate_cost_by("group_id", filtered_cost),
+        "searches_by_provider": _aggregate_cost_by("provider", filtered_search_requests),
+        "searches_by_group": _aggregate_cost_by("group_id", filtered_search_requests),
+        "search_cost_by_provider": _aggregate_cost_by("provider", filtered_search_cost),
     }
     return {
         "token_usage": filtered_tokens,
         "http_requests": filtered_requests,
         "http_duration": filtered_duration,
         "cost": filtered_cost,
+        "search_requests": filtered_search_requests,
+        "search_cost": filtered_search_cost,
         "summary": summary,
         "table_columns": _load_table_columns(),
         "time_window": time_window or "all",

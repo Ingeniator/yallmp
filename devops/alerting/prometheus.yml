@@ -79,3 +79,20 @@ scrape_configs:
         target_label: instance
       - target_label: __address__
         replacement: blackbox-exporter:9115
+
+  # ── checkr LLM backend probe (yallmp dependency for gates 7-8) ─────
+  - job_name: checkr-llm-backend
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets: ["http://yallmp:5000/ready"]
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+      - target_label: job
+        replacement: checkr-llm-backend
