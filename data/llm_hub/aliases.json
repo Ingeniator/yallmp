@@ -1,0 +1,6 @@
+{
+    "genui": {
+        "target": "anthropic/claude-opus-4.5",
+        "fallback": "openai/gpt-4o"
+    }
+}
