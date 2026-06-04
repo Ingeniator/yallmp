@@ -54,7 +54,7 @@ class AppSettings(BaseSettings):
 
 
     # Proxy
-    proxy_exclude_headers: str = "host,authorization,cookie,x-forwarded-*,jwt-*"
+    proxy_exclude_headers: str = "host,authorization,cookie,x-forwarded-*,jwt-*,content-length"
     proxy_verify_ssl: bool = True
     proxy_ca_bundle_path: str | None = None
     proxy_target_url: str = "http://localhost:8001"  # Target backend server to forward requests
