@@ -477,7 +477,7 @@ def create_app() -> FastAPI:
                     body_json = json.loads(raw)
                     model = body_json.get("model", "")
                     alias = llm_hub.resolve_alias(model) if model else None
-                    if alias and "/" not in alias.target:
+                    if alias:
                         body_json["model"] = alias.target
                         legacy_body = json.dumps(body_json).encode()
                 except (json.JSONDecodeError, AttributeError):
