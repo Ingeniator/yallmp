@@ -24,13 +24,15 @@ async def lifespan(app: FastAPI):
 
     app.state.client = client
 
-    # Initialize LLM Hub if enabled
-    llm_hub = None
+    # Always create LlmHub so aliases are available even in single-provider mode.
+    # Providers are only loaded/started when llm_hub_enabled is True.
+    from app.services.llm_hub import LlmHub
+    llm_hub = LlmHub()
     if settings.llm_hub_enabled:
-        from app.services.llm_hub import LlmHub
-        llm_hub = LlmHub()
         llm_hub.load_providers()
         await llm_hub.startup()
+    else:
+        llm_hub.load_aliases()
 
     app.state.llm_hub = llm_hub
 
@@ -467,8 +469,20 @@ def create_app() -> FastAPI:
                             pricing_cache=app.state.pricing_cache,
                         )
 
-            # Legacy single-provider path
-            return await proxy_request_with_retries(app.state.client, full_path, request, custom_headers, pricing_cache=app.state.pricing_cache)
+            # Legacy single-provider path — apply alias model-name rewrite if configured
+            legacy_body = None
+            if request.method == "POST" and llm_hub:
+                raw = await request.body()
+                try:
+                    body_json = json.loads(raw)
+                    model = body_json.get("model", "")
+                    alias = llm_hub.resolve_alias(model) if model else None
+                    if alias and "/" not in alias.target:
+                        body_json["model"] = alias.target
+                        legacy_body = json.dumps(body_json).encode()
+                except (json.JSONDecodeError, AttributeError):
+                    pass
+            return await proxy_request_with_retries(app.state.client, full_path, request, custom_headers, pricing_cache=app.state.pricing_cache, body=legacy_body)
 
     from app.schemas.feedback import FeedbackRequest, FeedbackResponse
     from app.services.tracing import score_trace

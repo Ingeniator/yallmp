@@ -244,6 +244,31 @@ def test_example_aliases_file_loads():
             assert "/" in entry.fallback, f"alias '{name}' fallback must be prefix/model"
 
 
+def test_load_aliases_standalone(tmp_path):
+    """load_aliases() works without any providers loaded."""
+    aliases = {"quick": {"target": "gpt-4o-mini"}, "smart": {"target": "gpt-4o"}}
+    (tmp_path / "aliases.json").write_text(json.dumps(aliases))
+    h = LlmHub()
+    h.load_aliases(str(tmp_path))
+    assert h.providers == {}
+    assert h.aliases["quick"].target == "gpt-4o-mini"
+    assert h.aliases["smart"].target == "gpt-4o"
+
+
+def test_load_aliases_standalone_missing_file(tmp_path):
+    """load_aliases() with no aliases.json leaves aliases empty."""
+    h = LlmHub()
+    h.load_aliases(str(tmp_path))
+    assert h.aliases == {}
+
+
+def test_load_aliases_standalone_invalid_json(tmp_path):
+    (tmp_path / "aliases.json").write_text("not json")
+    h = LlmHub()
+    h.load_aliases(str(tmp_path))
+    assert h.aliases == {}
+
+
 @pytest.mark.asyncio
 async def test_hub_startup_shutdown(provider_dir):
     hub = LlmHub()
