@@ -2,8 +2,9 @@ from app.services.search_adapters.base import SearchAdapter
 from app.services.search_adapters.tavily import TavilyAdapter
 from app.services.search_adapters.exa import ExaAdapter
 from app.services.search_adapters.brave import BraveAdapter
+from app.services.search_adapters.gigasearch import GigaSearchAdapter
 
-__all__ = ["SearchAdapter", "TavilyAdapter", "ExaAdapter", "BraveAdapter"]
+__all__ = ["SearchAdapter", "TavilyAdapter", "ExaAdapter", "BraveAdapter", "GigaSearchAdapter"]
 
 
 def get_adapter(provider_type: str) -> SearchAdapter:
@@ -12,6 +13,7 @@ def get_adapter(provider_type: str) -> SearchAdapter:
         "tavily": TavilyAdapter(),
         "exa": ExaAdapter(),
         "brave": BraveAdapter(),
+        "gigasearch": GigaSearchAdapter(),
     }
     adapter = adapters.get(provider_type)
     if adapter is None:
