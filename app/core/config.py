@@ -54,7 +54,7 @@ class AppSettings(BaseSettings):
 
 
     # Proxy
-    proxy_exclude_headers: str = "host,authorization,cookie,x-forwarded-*,jwt-*"
+    proxy_exclude_headers: str = "host,authorization,cookie,x-forwarded-*,jwt-*,content-length"
     proxy_verify_ssl: bool = True
     proxy_ca_bundle_path: str | None = None
     proxy_target_url: str = "http://localhost:8001"  # Target backend server to forward requests
@@ -109,6 +109,8 @@ class AppSettings(BaseSettings):
     billing_enabled: bool = False
     billing_redis_url: str = "redis://langfuse-redis:6379/0"
     billing_limits_path: str = "data/billing/limits.yaml"
+    billing_sync_url: str = ""          # llogr base URL for Redis cache seeding; falls back to tracing_host
+    billing_sync_interval: int = 300    # seconds between periodic syncs
 
     version: str = "0.1.0"
     

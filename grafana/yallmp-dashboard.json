@@ -86,10 +86,36 @@
       "panels": []
     },
     {
+      "title": "Service Status",
+      "type": "stat",
+      "datasource": "${datasource}",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" } } },
+            { "type": "value", "options": { "1": { "text": "UP", "color": "green" } } }
+          ],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+        },
+        "overrides": []
+      },
+      "options": { "graphMode": "none", "colorMode": "background", "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value" },
+      "targets": [
+        {
+          "datasource": "${datasource}",
+          "expr": "up{job=~\"$job\", instance=~\"$instance\"}",
+          "legendFormat": "{{ instance }}",
+          "instant": true
+        }
+      ]
+    },
+    {
       "title": "Request Rate",
       "type": "stat",
       "datasource": "${datasource}",
-      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 1 },
+      "gridPos": { "h": 4, "w": 5, "x": 4, "y": 1 },
       "fieldConfig": {
         "defaults": { "unit": "reqps", "thresholds": { "steps": [{ "color": "green", "value": null }] } },
         "overrides": []
@@ -107,7 +133,7 @@
       "title": "Error Rate (5xx)",
       "type": "stat",
       "datasource": "${datasource}",
-      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 1 },
+      "gridPos": { "h": 4, "w": 5, "x": 9, "y": 1 },
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
@@ -128,7 +154,7 @@
       "title": "P95 Latency",
       "type": "stat",
       "datasource": "${datasource}",
-      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 1 },
+      "gridPos": { "h": 4, "w": 5, "x": 14, "y": 1 },
       "fieldConfig": {
         "defaults": {
           "unit": "s",
@@ -149,7 +175,7 @@
       "title": "LLM Requests / min",
       "type": "stat",
       "datasource": "${datasource}",
-      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 1 },
+      "gridPos": { "h": 4, "w": 5, "x": 19, "y": 1 },
       "fieldConfig": {
         "defaults": { "unit": "none", "thresholds": { "steps": [{ "color": "blue", "value": null }] } },
         "overrides": []
@@ -426,10 +452,53 @@
       "panels": []
     },
     {
+      "title": "Service Uptime",
+      "type": "timeseries",
+      "datasource": "${datasource}",
+      "description": "Prometheus scrape health over time. Value drops to 0 whenever the service was unreachable.",
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 51 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0,
+          "max": 1,
+          "custom": {
+            "fillOpacity": 20,
+            "lineWidth": 2,
+            "spanNulls": false,
+            "thresholdsStyle": { "mode": "area" }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          },
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN" } } },
+            { "type": "value", "options": { "1": { "text": "UP" } } }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "datasource": "${datasource}",
+          "expr": "up{job=~\"$job\", instance=~\"$instance\"}",
+          "legendFormat": "{{ instance }}"
+        }
+      ]
+    },
+    {
       "title": "503 Responses (Circuit Breaker)",
       "type": "timeseries",
       "datasource": "${datasource}",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 51 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 59 },
       "fieldConfig": {
         "defaults": {
           "unit": "none",
@@ -451,7 +520,7 @@
       "title": "Request Rate by Group",
       "type": "timeseries",
       "datasource": "${datasource}",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 51 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 59 },
       "fieldConfig": {
         "defaults": { "unit": "reqps", "custom": { "fillOpacity": 15, "stacking": { "mode": "normal" } } },
         "overrides": []
@@ -534,5 +603,5 @@
     }
   ],
   "schemaVersion": 39,
-  "version": 6
+  "version": 8
 }

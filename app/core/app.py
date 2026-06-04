@@ -9,6 +9,7 @@ from app.schemas.prompt import ChainMetadataForTracking, ChainType
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, HTMLResponse, Response
 from contextlib import asynccontextmanager
+import asyncio
 import json
 import pathlib
 
@@ -69,6 +70,7 @@ async def lifespan(app: FastAPI):
     # Initialize billing Redis + limits
     app.state.billing_redis = None
     app.state.billing_limits = {}
+    app.state.billing_sync_task = None
     if settings.billing_enabled:
         import redis.asyncio as aioredis
         from app.services.billing import load_limits
@@ -76,7 +78,28 @@ async def lifespan(app: FastAPI):
         app.state.billing_limits = load_limits(settings.billing_limits_path)
         logger.info("Billing enabled", redis_url=settings.billing_redis_url)
 
+        sync_url = settings.billing_sync_url or settings.tracing_host or ""
+        if sync_url:
+            from app.services.billing_sync import sync_from_llogr, billing_sync_loop
+            await sync_from_llogr(app.state.billing_redis, app.state.billing_limits, sync_url)
+            app.state.billing_sync_task = asyncio.create_task(
+                billing_sync_loop(
+                    app.state.billing_redis,
+                    app.state.billing_limits,
+                    sync_url,
+                    settings.billing_sync_interval,
+                )
+            )
+            logger.info("Billing sync started", url=sync_url, interval=settings.billing_sync_interval)
+
     yield
+
+    if app.state.billing_sync_task:
+        app.state.billing_sync_task.cancel()
+        try:
+            await app.state.billing_sync_task
+        except asyncio.CancelledError:
+            pass
 
     if pricing_cache:
         await pricing_cache.shutdown()
@@ -292,16 +315,6 @@ def create_app() -> FastAPI:
                 time_window=time_window, start=start, end=end,
             )
 
-        @app.get("/dashboard/api/billing")
-        async def dashboard_api_billing(request: Request):
-            from app.services.billing import get_billing_summary
-            role, group_id = _effective_identity(request)
-            redis = getattr(request.app.state, "billing_redis", None)
-            limits = getattr(request.app.state, "billing_limits", {})
-            if not redis or not settings.billing_enabled:
-                return {"enabled": False}
-            return await get_billing_summary(redis, limits, group_id, role)
-
         @app.get("/dashboard/api/trends")
         async def dashboard_api_trends(
             request: Request,
@@ -477,7 +490,7 @@ def create_app() -> FastAPI:
                     body_json = json.loads(raw)
                     model = body_json.get("model", "")
                     alias = llm_hub.resolve_alias(model) if model else None
-                    if alias and "/" not in alias.target:
+                    if alias:
                         body_json["model"] = alias.target
                         legacy_body = json.dumps(body_json).encode()
                 except (json.JSONDecodeError, AttributeError):

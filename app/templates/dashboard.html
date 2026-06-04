@@ -59,18 +59,9 @@
   .status-dot.ok    { background: #4caf50; }
   .status-dot.stale { background: #ff9800; }
 
-  /* Billing gauges */
-  .gauge-row { background: #fff; border-radius: 8px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 12px; }
-  .gauge-label { display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 6px; }
-  .gauge-label span:first-child { font-weight: 600; }
-  .gauge-pct { color: #666; }
-  .gauge-track { height: 10px; background: #e8ecf0; border-radius: 5px; overflow: hidden; }
-  .gauge-fill { height: 100%; border-radius: 5px; background: #4a90d9; transition: width 0.3s; }
-  .gauge-fill.warn { background: #f5a623; }
-  .gauge-fill.over { background: #d94a68; }
-  .pct-warn { color: #f5a623; font-weight: 600; }
-  .pct-over { color: #d94a68; font-weight: 600; }
-  .subsection-title { font-size: 0.9rem; color: #555; margin: 16px 0 8px; font-weight: 600; }
+  /* Billing link */
+  .billing-link-card { background: #fff; border-radius: 8px; padding: 16px 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+  .billing-link-card p { font-size: 0.85rem; color: #666; margin: 4px 0 0; }
 
   /* Buttons */
   .action-bar { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
@@ -223,19 +214,15 @@
   </div>
 </div>
 
-<!-- Billing (all roles) -->
-<div class="section" data-roles="SUPER_ADMIN ORG_ADMIN USER" id="billingSection">
+<!-- Billing — moved to llogr -->
+<div class="section" id="billingSection">
   <h2>Billing &amp; Limits</h2>
-  <div class="action-bar">
-    <span id="billingPeriod" style="font-size:0.85rem;color:#666"></span>
-  </div>
-  <div id="billingGauges"><p class="empty-msg">Billing data not available.</p></div>
-  <div data-roles="SUPER_ADMIN ORG_ADMIN" id="usersTableWrap" style="display:none">
-    <p class="subsection-title">User Breakdown</p>
-    <table id="usersTable">
-      <thead><tr><th>User</th><th>Spent (USD)</th><th>Limit (USD)</th><th>Usage %</th></tr></thead>
-      <tbody></tbody>
-    </table>
+  <div class="billing-link-card">
+    <div>
+      <strong>Billing dashboard has moved</strong>
+      <p>Spend data is now sourced from ClickHouse via llogr — more accurate, fully auditable.</p>
+    </div>
+    <a id="billingLink" class="btn btn-primary btn-sm" href="#" target="_blank">Open Billing →</a>
   </div>
 </div>
 
@@ -282,15 +269,15 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
 (function() {
-  const BASE         = window.location.pathname.replace(/\/dashboard\/?.*$/, '/dashboard');
-  const CONFIG_API   = BASE + '/api/config';
-  const API_BASE     = BASE + '/api/metrics';
-  const BILLING_API  = BASE + '/api/billing';
-  const TRENDS_API   = BASE + '/api/trends';
-  const WHO_API      = BASE + '/api/who';
-  const SESSIONS_API = BASE + '/api/sessions';
+  const BASE          = window.location.pathname.replace(/\/dashboard\/?.*$/, '/dashboard');
+  const CONFIG_API    = BASE + '/api/config';
+  const API_BASE      = BASE + '/api/metrics';
+  const TRENDS_API    = BASE + '/api/trends';
+  const WHO_API       = BASE + '/api/who';
+  const SESSIONS_API  = BASE + '/api/sessions';
   const LLOGR_EXPORT  = window.location.origin + '/llogr/api/public/export';
   const LLOGR_BROWSER = window.location.origin + '/llogr/';
+  const LLOGR_BILLING = window.location.origin + '/llogr/billing';
   const COLORS = ['#4a90d9','#50c878','#f5a623','#d94a68','#9b59b6','#1abc9c','#e67e22','#3498db','#e74c3c','#2ecc71'];
 
   let charts = {};
@@ -591,57 +578,15 @@
     }
   }
 
-  // ── Billing ──────────────────────────────────────────────────────────────────
+  // ── Billing link ──────────────────────────────────────────────────────────────
 
-  function renderGauge(label, spent, limit, pct, isAlert) {
-    const cls = pct >= 100 ? 'over' : (isAlert ? 'warn' : '');
-    return '<div class="gauge-row">' +
-      '<div class="gauge-label">' +
-        '<span>' + esc(label) + '</span>' +
-        '<span class="gauge-pct">' + spent.toFixed(4) + ' / ' + limit.toFixed(2) + ' USD &nbsp; ' + pct.toFixed(1) + '%</span>' +
-      '</div>' +
-      '<div class="gauge-track"><div class="gauge-fill ' + cls + '" style="width:' + Math.min(pct, 100) + '%"></div></div>' +
-    '</div>';
+  function initBillingLink() {
+    document.getElementById('billingLink').href = LLOGR_BILLING;
   }
 
-  async function fetchAndRenderBilling() {
-    try {
-      const resp = await fetch(BILLING_API);
-      if (!resp.ok) return;
-      const data = await resp.json();
-      if (!data || data.enabled === false) return;
-
-      document.getElementById('billingPeriod').textContent = 'Period: ' + (data.period || '');
-      document.getElementById('discoverTracesLink').href = buildLlogrUrl(null);
-
-      let html = '';
-      (data.groups || []).forEach(g => {
-        html += renderGauge('Group: ' + g.org, g.group_spent, g.group_limit, g.group_pct, g.alert);
-      });
-      if (data.user) {
-        const u = data.user;
-        const pct = u.user_pct || 0;
-        html += renderGauge('User: ' + u.group_id, u.user_spent, u.user_limit, pct, pct >= 80);
-      }
-      document.getElementById('billingGauges').innerHTML = html || '<p class="empty-msg">No billing data for this period.</p>';
-
-      const usersWrap = document.getElementById('usersTableWrap');
-      if ((currentRole === 'ORG_ADMIN' || currentRole === 'SUPER_ADMIN') && usersWrap) {
-        const users = data.users || [];
-        if (users.length) {
-          usersWrap.style.display = '';
-          document.querySelector('#usersTable tbody').innerHTML = users.map(u => {
-            const cls = u.user_pct >= 100 ? 'pct-over' : (u.user_pct >= 80 ? 'pct-warn' : '');
-            return '<tr><td>' + esc(u.group_id) + '</td><td>' + u.user_spent.toFixed(4) + '</td><td>' +
-              u.user_limit.toFixed(2) + '</td><td class="' + cls + '">' + u.user_pct.toFixed(1) + '%</td></tr>';
-          }).join('');
-        } else {
-          usersWrap.style.display = 'none';
-        }
-      }
-    } catch (e) {
-      console.warn('Billing fetch error:', e);
-    }
+  function initDiscoverLink() {
+    const el = document.getElementById('discoverTracesLink');
+    if (el) el.href = buildLlogrUrl(null);
   }
 
   // ── Sessions ─────────────────────────────────────────────────────────────────
@@ -735,7 +680,6 @@
   function fetchAll() {
     fetchAndRender();
     fetchAndRenderTrends();
-    fetchAndRenderBilling();
     loadSessions(false);
   }
 
@@ -808,6 +752,8 @@
     location.reload();
   }
 
+  initBillingLink();
+  initDiscoverLink();
   initDevSwitcher();
   fetchWho().then(fetchAll);
   setupRefresh();
