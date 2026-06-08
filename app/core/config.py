@@ -109,6 +109,8 @@ class AppSettings(BaseSettings):
     billing_enabled: bool = False
     billing_redis_url: str = "redis://redis:6379/0"
     billing_limits_path: str = "data/billing/limits.yaml"
+    billing_sync_url: str = ""          # llogr base URL for Redis cache seeding; falls back to tracing_host
+    billing_sync_interval: int = 300    # seconds between periodic syncs
 
     version: str = "0.1.0"
     
