@@ -1,9 +1,9 @@
 """Seed Redis billing counters from llogr's ClickHouse-backed billing API.
 
 Runs once on startup and then on a periodic loop. Each sync overwrites Redis
-keys using SET ... GT (only raises the value, never lowers it), so Redis stays
-consistent with ClickHouse while in-flight increments from concurrent requests
-are never silently discarded.
+keys using a Lua script that only raises the value, never lowers it, so Redis
+stays consistent with ClickHouse while in-flight increments from concurrent
+requests are never silently discarded.
 """
 from __future__ import annotations
 
@@ -19,6 +19,15 @@ logger = setup_logging()
 
 _sync_lock = asyncio.Lock()
 _PAGE_SIZE = 500
+
+# Atomically sets key only if the new value is greater than the current value.
+_LUA_SET_GT = """
+local c = redis.call('GET', KEYS[1])
+if not c or tonumber(ARGV[1]) > tonumber(c) then
+    return redis.call('SET', KEYS[1], ARGV[1], 'EX', tonumber(ARGV[2]))
+end
+return 0
+"""
 
 
 def _period_range(period_type: str, now: datetime) -> tuple[str, str]:
@@ -96,8 +105,8 @@ async def sync_from_llogr(redis, limits: dict, llogr_url: str) -> None:
                             continue
                         tier = get_tier(limits, org)
                         pk = period_key(tier["period"])
-                        pipe.set(f"billing:group:{org}:{pk}", spent,
-                                 ex=period_ttl(tier["period"]), gt=True)
+                        pipe.eval(_LUA_SET_GT, 1, f"billing:group:{org}:{pk}",
+                                  spent, period_ttl(tier["period"]))
                         total_groups += 1
                     groups_written = True
 
@@ -110,8 +119,8 @@ async def sync_from_llogr(redis, limits: dict, llogr_url: str) -> None:
                     org = project_id.split("/")[0]
                     tier = get_tier(limits, org)
                     pk = period_key(tier["period"])
-                    pipe.set(f"billing:user:{project_id}:{pk}", spent,
-                             ex=period_ttl(tier["period"]), gt=True)
+                    pipe.eval(_LUA_SET_GT, 1, f"billing:user:{project_id}:{pk}",
+                              spent, period_ttl(tier["period"]))
                     total_users += 1
 
                 if not page.get("has_more", False):
