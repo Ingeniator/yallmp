@@ -128,6 +128,8 @@ def _mock_settings():
         dashboard_prometheus_url = ""
         dashboard_prometheus_timeout = 10
         version = "0.0.1-test"
+        search_hub_enabled=False
+        dashboard_dev_role_switcher=None
     return S()
 
 
@@ -142,7 +144,7 @@ def test_dashboard_html_endpoint():
 
     assert resp.status_code == 200
     assert "text/html" in resp.headers["content-type"]
-    assert "Metrics Dashboard" in resp.text
+    assert "AI Suite Dashboard" in resp.text
 
 
 def test_dashboard_api_metrics_endpoint():

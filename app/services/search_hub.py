@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 
+import httpx
 from httpx import AsyncClient, Limits, Timeout
 from fastapi import HTTPException
 
@@ -16,6 +17,57 @@ from app.schemas.search import SearchProviderConfig, SearchRequest, SearchRespon
 from app.services.search_adapters import get_adapter, SearchAdapter
 
 logger = setup_logging()
+
+
+def _bounded_text_preview(value: str | None, limit: int = 2000) -> str | None:
+    if not value:
+        return None
+    if len(value) <= limit:
+        return value
+    return value[:limit] + "...[truncated]"
+
+
+def _search_request_log_fields(req: SearchRequest) -> dict[str, object]:
+    return {
+        "query_len": len(req.query),
+        "num_results": req.num_results,
+        "search_depth": req.search_depth,
+        "include_raw_content": req.include_raw_content,
+        "include_domains_count": len(req.include_domains),
+        "exclude_domains_count": len(req.exclude_domains),
+    }
+
+
+def _extract_exception_log_fields(exc: Exception) -> dict[str, object]:
+    fields: dict[str, object] = {
+        "exception_type": type(exc).__name__,
+        "exception_message": str(exc),
+    }
+    if not fields["exception_message"]:
+        fields["exception_repr"] = repr(exc)
+
+    if isinstance(exc, httpx.HTTPStatusError):
+        request = exc.request
+        response = exc.response
+        fields.update(
+            {
+                "upstream_method": request.method,
+                "upstream_url": str(request.url),
+                "upstream_status_code": response.status_code,
+                "upstream_response_preview": _bounded_text_preview(response.text),
+            }
+        )
+    elif isinstance(exc, httpx.RequestError):
+        request = exc.request
+        if request is not None:
+            fields.update(
+                {
+                    "upstream_method": request.method,
+                    "upstream_url": str(request.url),
+                }
+            )
+
+    return fields
 
 
 class SearchProvider:
@@ -68,6 +120,13 @@ class SearchProvider:
     async def search(self, req: SearchRequest) -> SearchResponse:
         """Execute a search with circuit-breaker protection."""
         if await self.circuit_breaker.check_open():
+            logger.warning(
+                "Search provider circuit breaker open",
+                provider=self.config.name,
+                provider_type=self.config.type,
+                base_url=self.config.base_url,
+                **_search_request_log_fields(req),
+            )
             raise HTTPException(
                 status_code=503,
                 detail=f"Search provider '{self.config.name}' circuit breaker open. Try later.",
@@ -88,20 +147,33 @@ class SearchProvider:
         except HTTPException:
             raise
         except Exception as exc:
+            error_fields = {
+                "provider": self.config.name,
+                "provider_type": self.config.type,
+                "base_url": self.config.base_url,
+                **_search_request_log_fields(req),
+                **_extract_exception_log_fields(exc),
+            }
             activated = await self.circuit_breaker.record_failure()
             if activated:
                 logger.error(
                     "Search circuit breaker activated",
-                    provider=self.config.name,
-                    exc_info=exc,
+                    circuit_breaker_activated=True,
+                    **error_fields,
                 )
                 raise HTTPException(
                     status_code=503,
                     detail=f"Search provider '{self.config.name}' circuit breaker activated.",
                 ) from exc
+            logger.warning(
+                "Search upstream request failed",
+                circuit_breaker_activated=False,
+                **error_fields,
+            )
+            detail = error_fields["exception_message"] or error_fields.get("exception_repr") or type(exc).__name__
             raise HTTPException(
                 status_code=502,
-                detail=f"Search provider '{self.config.name}' request failed: {exc}",
+                detail=f"Search provider '{self.config.name}' request failed: {detail}",
             ) from exc
 
 
