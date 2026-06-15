@@ -66,16 +66,24 @@ def chain_dir(tmp_path):
 def test_get_chains(chain_dir):
     store = StaticChainStore(str(chain_dir))
     import asyncio
-    chains = asyncio.get_event_loop().run_until_complete(store.get_chains())
+    loop = asyncio.new_event_loop()
+    try:
+        chains = loop.run_until_complete(store.get_chains())
+    finally:
+        loop.close()
     assert "test_chain" in chains
 
 
 def test_get_chains_filter(chain_dir):
     store = StaticChainStore(str(chain_dir))
     import asyncio
-    chains = asyncio.get_event_loop().run_until_complete(store.get_chains(category="demo"))
-    assert "test_chain" in chains
-    chains = asyncio.get_event_loop().run_until_complete(store.get_chains(category="nonexistent"))
+    loop = asyncio.new_event_loop()
+    try:
+        chains = loop.run_until_complete(store.get_chains(category="demo"))
+        assert "test_chain" in chains
+        chains = loop.run_until_complete(store.get_chains(category="nonexistent"))
+    finally:
+        loop.close()
     assert "test_chain" not in chains
 
 

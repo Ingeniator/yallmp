@@ -202,7 +202,7 @@ class TestGetLangchainCallback:
 
         with patch.dict("sys.modules", {
             "langfuse": MagicMock(Langfuse=MagicMock(return_value=mock_langfuse)),
-            "langfuse.callback": MagicMock(CallbackHandler=MagicMock(return_value=mock_handler)),
+            "langfuse.langchain": MagicMock(CallbackHandler=MagicMock(return_value=mock_handler)),
         }):
             emitter = LangfuseEmitter()
             cb = emitter.get_langchain_callback(

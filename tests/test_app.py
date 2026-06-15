@@ -15,6 +15,11 @@ def test_health_all_disabled():
         mock_settings.llm_hub_enabled = False
         mock_settings.dashboard_enabled = False
         mock_settings.version = "0.0.1-test"
+        mock_settings.proxy_pricing_endpoint = None
+        mock_settings.billing_enabled = False
+        mock_settings.search_hub_enabled = False
+        mock_settings.tracing_enabled = False
+
 
         from app.core.app import create_app
         app = create_app()
@@ -29,7 +34,20 @@ def test_health_all_disabled():
 
 
 def test_health_all_enabled():
-    with patch("app.core.app.settings") as mock_settings:
+    mock_cb = AsyncMock(return_value={"circuit_open": False})
+    mock_client = AsyncMock()
+
+    with (
+        patch("app.core.app.settings") as mock_settings,
+        patch("app.core.proxy.circuit_breaker.get_status", mock_cb),
+        patch("app.core.proxy.create_async_client", AsyncMock(return_value=mock_client)),
+        patch("app.services.llm_hub.LlmHub.load_providers"),
+        patch("app.services.llm_hub.LlmHub.startup", AsyncMock()),
+        patch("app.services.search_hub.SearchHub.load_providers"),
+        patch("app.services.search_hub.SearchHub.startup", AsyncMock()),
+        patch("redis.asyncio.from_url", return_value=MagicMock(aclose=AsyncMock())),
+        patch("httpx.AsyncClient") as mock_httpx_client,
+    ):
         mock_settings.app_name = "TestApp"
         mock_settings.debug = False
         mock_settings.root_path = ""
@@ -40,6 +58,21 @@ def test_health_all_enabled():
         mock_settings.llm_hub_enabled = True
         mock_settings.dashboard_enabled = True
         mock_settings.version = "0.0.1-test"
+        mock_settings.proxy_pricing_endpoint = None
+        mock_settings.proxy_pricing_config = None
+        mock_settings.billing_enabled = True
+        mock_settings.search_hub_enabled = True
+        mock_settings.tracing_enabled = True
+        mock_settings.tracing_host = "https://localhost"
+        mock_settings.billing_redis_url = "redis://redis:6379/0"
+        mock_settings.billing_limits_path = "data/billing/limits.yaml"
+
+        mock_trace_response = AsyncMock()
+        mock_trace_response.raise_for_status = MagicMock()
+        mock_trace_client = AsyncMock()
+        mock_trace_client.get = AsyncMock(return_value=mock_trace_response)
+        mock_httpx_client.return_value.__aenter__.return_value = mock_trace_client
+        mock_httpx_client.return_value.__aexit__.return_value = False
 
         from app.core.app import create_app
         app = create_app()
@@ -47,6 +80,7 @@ def test_health_all_enabled():
 
         resp = client.get("/health")
         data = resp.json()
+        assert resp.status_code == 200
         assert data["status"] == "ok"
         assert all(v == "ok" for v in data["components"].values())
 
@@ -86,6 +120,11 @@ def test_lifespan_no_proxy():
         mock_settings.dashboard_enabled = False
         mock_settings.proxy_pricing_config = None
         mock_settings.version = "0.0.1-test"
+        mock_settings.proxy_pricing_endpoint = None
+        mock_settings.billing_enabled = False
+        mock_settings.search_hub_enabled = False
+        mock_settings.tracing_enabled = False
+
 
         from app.core.app import create_app
         app = create_app()
@@ -113,6 +152,10 @@ def test_lifespan_with_proxy():
         mock_settings.dashboard_enabled = False
         mock_settings.proxy_pricing_config = None
         mock_settings.version = "0.0.1-test"
+        mock_settings.proxy_pricing_endpoint = None
+        mock_settings.billing_enabled = False
+        mock_settings.search_hub_enabled = False
+        mock_settings.tracing_enabled = False
 
         from app.core.app import create_app
         app = create_app()
@@ -132,7 +175,7 @@ def _mock_settings(**overrides):
         app_name="TestApp", debug=False, root_path="", allowed_origins=["*"],
         proxy_enabled=False, prompt_hub_enabled=False, chain_hub_enabled=False,
         llm_hub_enabled=False, dashboard_enabled=False, proxy_pricing_config=None,
-        version="0.0.1-test",
+        proxy_pricing_endpoint=None, version="0.0.1-test", search_hub_enabled=False, billing_enabled=False,
     )
     defaults.update(overrides)
 
