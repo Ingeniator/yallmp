@@ -247,6 +247,70 @@ def create_app() -> FastAPI:
             details=details if details else None,
         )
 
+
+    if settings.debug_network_check:
+        import socket as _socket
+        import time as _time
+        import httpx as _httpx
+
+        @app.get("/debug/network-check")
+        async def debug_network_check():
+            targets = [
+                {"provider": "exa", "host": "api.exa.ai", "port": 443, "url": "https://api.exa.ai"},
+                {"provider": "tavily", "host": "api.tavily.com", "port": 443, "url": "https://api.tavily.com"},
+                {"provider": "brave", "host": "api.search.brave.com", "port": 443, "url": "https://api.search.brave.com"},
+            ]
+
+            results = []
+            for target in targets:
+                result = {
+                    "provider": target["provider"],
+                    "host": target["host"],
+                    "port": target["port"],
+                    "url": target["url"],
+                    "dns_ok": False,
+                    "resolved_ips": [],
+                    "tcp_connect_ok": False,
+                    "https_ok": False,
+                }
+
+                try:
+                    addrinfo = _socket.getaddrinfo(target["host"], target["port"], type=_socket.SOCK_STREAM)
+                    resolved_ips = sorted({item[4][0] for item in addrinfo})
+                    result["dns_ok"] = True
+                    result["resolved_ips"] = resolved_ips
+                except Exception as exc:
+                    result["dns_error"] = f"{type(exc).__name__}: {exc}"
+                    results.append(result)
+                    continue
+
+                tcp_start = _time.monotonic()
+                try:
+                    with _socket.create_connection((target["host"], target["port"]), timeout=5):
+                        pass
+                    result["tcp_connect_ok"] = True
+                    result["tcp_connect_duration_ms"] = round((_time.monotonic() - tcp_start) * 1000, 2)
+                except Exception as exc:
+                    result["tcp_error"] = f"{type(exc).__name__}: {exc}"
+                    result["tcp_connect_duration_ms"] = round((_time.monotonic() - tcp_start) * 1000, 2)
+                    results.append(result)
+                    continue
+
+                https_start = _time.monotonic()
+                try:
+                    async with _httpx.AsyncClient(timeout=_httpx.Timeout(connect=5, read=10, write=10, pool=5), follow_redirects=True) as client:
+                        resp = await client.get(target["url"])
+                    result["https_ok"] = True
+                    result["https_status_code"] = resp.status_code
+                    result["https_duration_ms"] = round((_time.monotonic() - https_start) * 1000, 2)
+                except Exception as exc:
+                    result["https_error"] = f"{type(exc).__name__}: {exc}"
+                    result["https_duration_ms"] = round((_time.monotonic() - https_start) * 1000, 2)
+
+                results.append(result)
+
+            return {"enabled": True, "checks": results}
+
     if settings.dashboard_enabled:
         from app.services.dashboard import get_dashboard_json
         from app.core.security import sanitize_group_id
