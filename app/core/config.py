@@ -17,7 +17,7 @@ class AppSettings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 5000
     allowed_origins: list[str] = ["*"]
-    
+
     # Fake LLM
     fake_llm_host: str = "0.0.0.0"
     fake_llm_port: int = 5001
@@ -51,6 +51,7 @@ class AppSettings(BaseSettings):
     log_level: str = "INFO"
     log_file: str | None = None
     silence_probes: bool = True
+    debug_network_check: bool = True
 
 
     # Proxy
@@ -111,7 +112,7 @@ class AppSettings(BaseSettings):
     billing_limits_path: str = "data/billing/limits.yaml"
 
     version: str = "0.1.0"
-    
+
     model_config = SettingsConfigDict(env_prefix="LLM_", env_file=".env", env_file_encoding="utf-8", extra='allow')
 
 # Load settings
