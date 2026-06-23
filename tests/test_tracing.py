@@ -111,6 +111,7 @@ class TestTraceProxyRequest:
             trace_id=None,
             tools_defined=None,
             tool_calls=None,
+            agent_name=None,
         )
 
     def test_strips_io_when_log_io_false(self):

@@ -31,6 +31,7 @@ class TraceEmitter(Protocol):
         trace_id: str | None = None,
         tools_defined: list[str] | None = None,
         tool_calls: list[str] | None = None,
+        agent_name: str | None = None,
     ) -> None: ...
 
     async def score(
@@ -93,6 +94,7 @@ def trace_proxy_request(
     trace_id: str | None = None,
     tools_defined: list[str] | None = None,
     tool_calls: list[str] | None = None,
+    agent_name: str | None = None,
 ) -> None:
     """Convenience wrapper — strips IO when configured, then delegates to the emitter."""
     emitter = get_emitter()
@@ -119,6 +121,7 @@ def trace_proxy_request(
             trace_id=trace_id,
             tools_defined=tools_defined,
             tool_calls=tool_calls,
+            agent_name=agent_name,
         )
     except Exception as e:
         logger.error("Error in trace_proxy_request", exc_info=e)

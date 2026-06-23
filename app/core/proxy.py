@@ -467,6 +467,7 @@ def _emit_completions_metrics(
         trace_id=request.headers.get("x-request-id"),
         tools_defined=_extract_tools_defined(input_body),
         tool_calls=_extract_tool_calls(response_data.get("choices", [])),
+        agent_name=request.headers.get("x-agent-name") or None,
     )
 
     if cost is not None and settings.billing_enabled:
@@ -795,6 +796,7 @@ def _emit_streaming_metrics(
                 trace_id=request.headers.get("x-request-id"),
                 tools_defined=_extract_tools_defined(input_body),
                 tool_calls=_extract_streaming_tool_calls(full_text),
+                agent_name=request.headers.get("x-agent-name") or None,
             )
 
             if cost is not None and settings.billing_enabled:
