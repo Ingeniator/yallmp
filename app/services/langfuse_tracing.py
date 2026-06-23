@@ -40,10 +40,14 @@ class LangfuseEmitter:
         self._host = settings.tracing_host
         self._public_key = settings.tracing_public_key
         self._secret_key = settings.tracing_secret_key
+        self._environment = settings.tracing_environment
+        self._release = settings.tracing_release
         self._default_client = Langfuse(
             host=self._host,
             public_key=self._public_key,
             secret_key=self._secret_key,
+            environment=self._environment,
+            release=self._release,
         )
         self._clients: OrderedDict[str, object] = OrderedDict()
 
@@ -64,6 +68,8 @@ class LangfuseEmitter:
             host=self._host,
             public_key=group_id,
             secret_key=group_id,
+            environment=self._environment,
+            release=self._release,
         )
         self._clients[group_id] = client
 
@@ -92,17 +98,35 @@ class LangfuseEmitter:
         tools_defined: list[str] | None = None,
         tool_calls: list[str] | None = None,
         agent_name: str | None = None,
+        completion_start_time: datetime | None = None,
+        prompt_name: str | None = None,
+        prompt_version: str | None = None,
     ) -> None:
         client = self._get_client(group_id)
 
         usage_details = {}
         if usage:
+            # OpenAI field names
             if "prompt_tokens" in usage:
                 usage_details["input"] = usage["prompt_tokens"]
             if "completion_tokens" in usage:
                 usage_details["output"] = usage["completion_tokens"]
             if "total_tokens" in usage:
                 usage_details["total"] = usage["total_tokens"]
+            # Anthropic native field names (fallback when OpenAI names absent)
+            if "input_tokens" in usage and "input" not in usage_details:
+                usage_details["input"] = usage["input_tokens"]
+            if "output_tokens" in usage and "output" not in usage_details:
+                usage_details["output"] = usage["output_tokens"]
+            # Anthropic prompt caching
+            if "cache_creation_input_tokens" in usage:
+                usage_details["cache_creation_input"] = usage["cache_creation_input_tokens"]
+            if "cache_read_input_tokens" in usage:
+                usage_details["cache_read_input"] = usage["cache_read_input_tokens"]
+            # OpenAI o1/o3 reasoning tokens
+            reasoning = (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
+            if reasoning:
+                usage_details["reasoning"] = reasoning
 
         metadata = {
             "provider": provider,
@@ -123,6 +147,29 @@ class LangfuseEmitter:
             metadata["cost"] = cost.total
             metadata["input_cost"] = cost.input
             metadata["output_cost"] = cost.output
+
+        model_parameters: dict | None = None
+        if input_body:
+            _param_keys = ("temperature", "max_tokens", "top_p", "frequency_penalty", "presence_penalty", "seed")
+            extracted = {k: input_body[k] for k in _param_keys if k in input_body}
+            if extracted:
+                model_parameters = extracted
+
+        # Anthropic extended thinking: split thinking blocks out of the output
+        # so Langfuse shows the reasoning separately in metadata.
+        content_blocks = (output_body or {}).get("content")
+        if isinstance(content_blocks, list) and any(b.get("type") == "thinking" for b in content_blocks if isinstance(b, dict)):
+            thinking_texts = [b["thinking"] for b in content_blocks if isinstance(b, dict) and b.get("type") == "thinking"]
+            metadata["thinking"] = thinking_texts if len(thinking_texts) > 1 else thinking_texts[0]
+
+        level = "ERROR" if status_code >= 400 else None
+        status_message = f"HTTP {status_code}" if status_code >= 400 else None
+
+        user_id: str | None = None
+        if group_id and "/" in group_id:
+            user_id = group_id.split("/", 1)[1] or None
+
+        tags = [t for t in (provider, agent_name) if t] or None
 
         trace_name = model or "llm-proxy"
         valid_trace_id = Langfuse.create_trace_id(seed=trace_id) if trace_id else None
@@ -145,7 +192,7 @@ class LangfuseEmitter:
             )
             otel_context = otel_trace_api.set_span_in_context(remote_parent)
 
-        with propagate_attributes(session_id=session_id or None):
+        with propagate_attributes(session_id=session_id or None, user_id=user_id, tags=tags):
             with client._otel_tracer.start_as_current_span(
                 name=trace_name,
                 context=otel_context,   # None → use ambient OTEL context
@@ -156,6 +203,10 @@ class LangfuseEmitter:
                     # Mirror what Langfuse sets in _create_span_with_parent_context so the
                     # backend renders this as a root-level trace, not a dangling child.
                     otel_span.set_attribute(_LANGFUSE_AS_ROOT_ATTR, True)
+                if prompt_name:
+                    otel_span.set_attribute(LangfuseOtelSpanAttributes.OBSERVATION_PROMPT_NAME, prompt_name)
+                if prompt_version:
+                    otel_span.set_attribute(LangfuseOtelSpanAttributes.OBSERVATION_PROMPT_VERSION, str(prompt_version))
                 gen = LangfuseGeneration(
                     otel_span=otel_span,
                     langfuse_client=client,
@@ -166,8 +217,11 @@ class LangfuseEmitter:
                     metadata=metadata,
                     usage_details=usage_details or None,
                     cost_details=cost_details,
-                    completion_start_time=start_time,
+                    completion_start_time=completion_start_time,
                     model=model,
+                    model_parameters=model_parameters,
+                    level=level,
+                    status_message=status_message,
                 )
                 gen.end(end_time=end_time_ns)  # → otel_span.end(end_time=ns) internally
 

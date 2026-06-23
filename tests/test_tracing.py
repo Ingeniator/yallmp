@@ -25,7 +25,11 @@ class TestGetEmitter:
         mock_emitter = MagicMock()
         with patch("app.services.tracing.settings") as mock_settings, \
              patch("app.services.tracing.logger"), \
-             patch.dict("sys.modules", {"langfuse": MagicMock()}), \
+             patch.dict("sys.modules", {
+                 "langfuse": MagicMock(),
+                 "langfuse._client": MagicMock(),
+                 "langfuse._client.attributes": MagicMock(),
+             }), \
              patch("app.services.langfuse_tracing.LangfuseEmitter", return_value=mock_emitter):
             mock_settings.tracing_enabled = True
             mock_settings.tracing_backend = "langfuse"
@@ -112,6 +116,9 @@ class TestTraceProxyRequest:
             tools_defined=None,
             tool_calls=None,
             agent_name=None,
+            completion_start_time=None,
+            prompt_name=None,
+            prompt_version=None,
         )
 
     def test_strips_io_when_log_io_false(self):

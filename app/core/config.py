@@ -46,6 +46,8 @@ class AppSettings(BaseSettings):
     tracing_host: str | None = None  # e.g. http://llogr:8000
     tracing_public_key: str = "default"
     tracing_secret_key: str = "default"
+    tracing_environment: str | None = None  # e.g. "production", "staging"
+    tracing_release: str | None = None      # e.g. git commit SHA or semver tag
 
     # Logging
     log_level: str = "INFO"

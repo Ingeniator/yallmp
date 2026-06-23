@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from app.core.config import settings
@@ -32,6 +33,9 @@ class TraceEmitter(Protocol):
         tools_defined: list[str] | None = None,
         tool_calls: list[str] | None = None,
         agent_name: str | None = None,
+        completion_start_time: datetime | None = None,
+        prompt_name: str | None = None,
+        prompt_version: str | None = None,
     ) -> None: ...
 
     async def score(
@@ -95,6 +99,9 @@ def trace_proxy_request(
     tools_defined: list[str] | None = None,
     tool_calls: list[str] | None = None,
     agent_name: str | None = None,
+    completion_start_time: datetime | None = None,
+    prompt_name: str | None = None,
+    prompt_version: str | None = None,
 ) -> None:
     """Convenience wrapper — strips IO when configured, then delegates to the emitter."""
     emitter = get_emitter()
@@ -122,6 +129,9 @@ def trace_proxy_request(
             tools_defined=tools_defined,
             tool_calls=tool_calls,
             agent_name=agent_name,
+            completion_start_time=completion_start_time,
+            prompt_name=prompt_name,
+            prompt_version=prompt_version,
         )
     except Exception as e:
         logger.error("Error in trace_proxy_request", exc_info=e)

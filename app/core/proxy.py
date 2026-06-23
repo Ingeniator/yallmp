@@ -468,6 +468,8 @@ def _emit_completions_metrics(
         tools_defined=_extract_tools_defined(input_body),
         tool_calls=_extract_tool_calls(response_data.get("choices", [])),
         agent_name=request.headers.get("x-agent-name") or None,
+        prompt_name=request.headers.get("x-prompt-name") or None,
+        prompt_version=request.headers.get("x-prompt-version") or None,
     )
 
     if cost is not None and settings.billing_enabled:
@@ -645,8 +647,11 @@ async def _handle_streaming_request(
 
     async def _stream_generator():
         collected_chunks: list[str] = []
+        first_chunk_time: float | None = None
         try:
             async for chunk in upstream_response.aiter_bytes():
+                if first_chunk_time is None:
+                    first_chunk_time = time.time()
                 collected_chunks.append(chunk.decode("utf-8", errors="replace"))
                 yield chunk
         finally:
@@ -656,6 +661,7 @@ async def _handle_streaming_request(
                 _emit_streaming_metrics(
                     collected_chunks, request, start_time, body,
                     provider_prefix, provider_currency, pricing_cache,
+                    first_chunk_time=first_chunk_time,
                 )
 
     return StreamingResponse(
@@ -724,6 +730,7 @@ def _emit_streaming_metrics(
     provider_prefix: str | None = None,
     provider_currency: str | None = None,
     pricing_cache=None,
+    first_chunk_time: float | None = None,
 ) -> None:
     """Parse SSE chunks for usage data and emit metrics + tracing."""
     try:
@@ -781,6 +788,11 @@ def _emit_streaming_metrics(
                     s_usage.get("completion_tokens", 0),
                 )
 
+            from datetime import datetime, timezone
+            completion_start_time = (
+                datetime.fromtimestamp(first_chunk_time, tz=timezone.utc)
+                if first_chunk_time else None
+            )
             trace_proxy_request(
                 model=last_payload.get("model", ""),
                 provider=pfx,
@@ -797,6 +809,9 @@ def _emit_streaming_metrics(
                 tools_defined=_extract_tools_defined(input_body),
                 tool_calls=_extract_streaming_tool_calls(full_text),
                 agent_name=request.headers.get("x-agent-name") or None,
+                completion_start_time=completion_start_time,
+                prompt_name=request.headers.get("x-prompt-name") or None,
+                prompt_version=request.headers.get("x-prompt-version") or None,
             )
 
             if cost is not None and settings.billing_enabled:
