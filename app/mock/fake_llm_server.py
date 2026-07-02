@@ -1,4 +1,8 @@
-from fastapi import Depends, FastAPI
+import asyncio
+import json
+import time
+from fastapi import Depends, FastAPI, Request
+from fastapi.responses import StreamingResponse
 from app.mock.fake_llm import get_fake_llm
 from app.core.config import settings
 from app.core.logging_config import setup_logging
@@ -47,10 +51,44 @@ def create_app() -> FastAPI:
                     ],
                 }
 
-    # Chat Completions
+    _STREAMING_WORDS = ["Hello", ",", " I", " am", " a", " fake", " streaming", " LLM", "."]
+
+    # Chat Completions — supports both sync and streaming (stream: true)
     @app.post("/v1/chat/completions")
-    async def chat(llm: BaseChatModel = Depends(get_fake_llm)):
-        return llm.invoke("Hello, world!").response_metadata
+    async def chat(req: Request, llm: BaseChatModel = Depends(get_fake_llm)):
+        try:
+            body = await req.json()
+        except Exception:
+            body = {}
+
+        if not body.get("stream"):
+            return llm.invoke("Hello, world!").response_metadata
+
+        model = body.get("model", "fake-model-id-0")
+        completion_id = f"chatcmpl-fake-{int(time.time())}"
+
+        async def _sse_generator():
+            for i, word in enumerate(_STREAMING_WORDS):
+                chunk = {
+                    "id": completion_id,
+                    "object": "chat.completion.chunk",
+                    "model": model,
+                    "choices": [{"index": 0, "delta": {"role": "assistant", "content": word}, "finish_reason": None}],
+                }
+                yield f"data: {json.dumps(chunk)}\n\n"
+                await asyncio.sleep(0)
+
+            final_chunk = {
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "model": model,
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": len(_STREAMING_WORDS), "total_tokens": 10 + len(_STREAMING_WORDS)},
+            }
+            yield f"data: {json.dumps(final_chunk)}\n\n"
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(_sse_generator(), media_type="text/event-stream")
 
     # Embeddings
     @app.post("/v1/embeddings")

@@ -127,6 +127,12 @@ def _mock_settings():
         dashboard_metrics_backend = "local"
         dashboard_prometheus_url = ""
         dashboard_prometheus_timeout = 10
+        search_hub_enabled = False
+        tracing_enabled = False
+        billing_enabled = False
+        proxy_pricing_config = None
+        proxy_pricing_endpoint = None
+        dashboard_dev_role_switcher = False
         version = "0.0.1-test"
         search_hub_enabled=False
         dashboard_dev_role_switcher=None
