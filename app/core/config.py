@@ -46,6 +46,8 @@ class AppSettings(BaseSettings):
     tracing_host: str | None = None  # e.g. http://llogr:8000
     tracing_public_key: str = "default"
     tracing_secret_key: str = "default"
+    tracing_environment: str | None = None  # e.g. "production", "staging"
+    tracing_release: str | None = None      # e.g. git commit SHA or semver tag
 
     # Logging
     log_level: str = "INFO"
@@ -107,7 +109,7 @@ class AppSettings(BaseSettings):
 
     # Billing
     billing_enabled: bool = False
-    billing_redis_url: str = "redis://redis:6379/0"
+    billing_redis_url: str = "redis://tagme-x-redis:6379/1"
     billing_limits_path: str = "data/billing/limits.yaml"
     billing_sync_url: str = ""          # llogr base URL for Redis cache seeding; falls back to tracing_host
     billing_sync_interval: int = 300    # seconds between periodic syncs

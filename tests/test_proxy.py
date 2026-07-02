@@ -414,3 +414,139 @@ class TestEmitStreamingMetricsOutputBody:
         assert output_body["choices"][0]["message"]["content"] == "Hello world"
         assert output_body["choices"][0]["finish_reason"] == "stop"
         assert output_body["usage"]["total_tokens"] == 7
+
+    def test_no_trace_when_no_data_lines(self):
+        """Empty SSE stream (only [DONE]) must not call trace_proxy_request."""
+        from app.core.proxy import _emit_streaming_metrics
+
+        request = self._make_request()
+
+        with patch("app.core.proxy.trace_proxy_request") as mock_trace, \
+             patch("app.core.proxy.settings") as mock_settings:
+            mock_settings.tracing_log_io = True
+            mock_settings.billing_enabled = False
+            _emit_streaming_metrics(["data: [DONE]\n\n"], request, start_time=0)
+
+        mock_trace.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# End-to-end streaming pipeline: proxy_request_with_retries produces full trace
+# ---------------------------------------------------------------------------
+
+class TestStreamingPipelineEndToEnd:
+    """Verify the full path: proxy → stream_generator → emit_metrics → trace.
+
+    This test exercises the real _stream_generator coroutine (not a mock).
+    It proves that the assembled output passed to trace_proxy_request contains
+    ALL delta content from ALL SSE chunks — not just the first one — and that
+    HTTP chunks which do NOT align to SSE event boundaries are handled correctly
+    (because _emit_streaming_metrics joins all raw byte-chunks before parsing).
+    """
+
+    def _make_request(self, body: bytes = b""):
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/chat/completions",
+            "query_string": b"",
+            "headers": [
+                (b"host", b"localhost"),
+                (b"x-group-id", b"test-group"),
+            ],
+            "root_path": "",
+        }
+        return Request(scope, receive=AsyncMock(return_value={"type": "http.request", "body": body}))
+
+    @pytest.mark.asyncio
+    async def test_full_content_reaches_trace(self):
+        """All SSE delta chunks are assembled into a single output in the trace."""
+        from app.core.proxy import proxy_request_with_retries
+
+        input_body = {"model": "test-model", "messages": [{"role": "user", "content": "hi"}], "stream": True}
+        body = json.dumps(input_body).encode()
+        request = self._make_request(body=body)
+
+        sse_chunks = [
+            'data: {"id":"c1","model":"test-model","choices":[{"index":0,"delta":{"role":"assistant","content":"The"},"finish_reason":null}]}\n\n',
+            'data: {"id":"c1","model":"test-model","choices":[{"index":0,"delta":{"content":" quick"},"finish_reason":null}]}\n\n',
+            'data: {"id":"c1","model":"test-model","choices":[{"index":0,"delta":{"content":" brown"},"finish_reason":null}]}\n\n',
+            'data: {"id":"c1","model":"test-model","choices":[{"index":0,"delta":{"content":" fox"},"finish_reason":null}]}\n\n',
+            'data: {"id":"c1","model":"test-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":4,"total_tokens":6}}\n\n',
+            "data: [DONE]\n\n",
+        ]
+        fake_upstream = FakeUpstreamResponse(status_code=200, chunks=sse_chunks)
+
+        mock_client = AsyncMock(spec=AsyncClient)
+        mock_client.build_request = MagicMock(return_value=MagicMock())
+        mock_client.send = AsyncMock(return_value=fake_upstream)
+
+        with patch("app.core.proxy.trace_proxy_request") as mock_trace, \
+             patch("app.core.proxy.settings") as mock_settings:
+            _configure_settings(mock_settings)
+            mock_settings.tracing_log_io = True
+            mock_settings.billing_enabled = False
+
+            response = await proxy_request_with_retries(
+                client=mock_client, path="v1/chat/completions",
+                request=request, custom_headers={},
+            )
+            # Consume the entire stream so the finally block fires
+            async for _ in response.body_iterator:
+                pass
+
+        mock_trace.assert_called_once()
+        output_body = mock_trace.call_args.kwargs["output_body"]
+        assert output_body["choices"][0]["message"]["content"] == "The quick brown fox"
+        assert output_body["choices"][0]["finish_reason"] == "stop"
+        assert output_body["usage"]["total_tokens"] == 6
+
+    @pytest.mark.asyncio
+    async def test_split_http_chunks_are_reassembled(self):
+        """SSE payloads split across HTTP chunk boundaries are correctly rejoined.
+
+        aiter_bytes() delivers raw bytes with no guarantee of SSE-event alignment.
+        _emit_streaming_metrics joins all chunks before parsing, so truncated
+        JSON in one chunk is completed by the next, and the full content is assembled.
+        """
+        from app.core.proxy import proxy_request_with_retries
+
+        input_body = {"model": "m", "messages": [], "stream": True}
+        body = json.dumps(input_body).encode()
+        request = self._make_request(body=body)
+
+        # Two SSE events deliberately split mid-JSON across HTTP chunks
+        full_event_1 = 'data: {"id":"x","model":"m","choices":[{"index":0,"delta":{"content":"Split"},"finish_reason":null}]}\n\n'
+        full_event_2 = 'data: {"id":"x","model":"m","choices":[{"index":0,"delta":{"content":"Chunk"},"finish_reason":null}]}\n\n'
+        full_event_3 = 'data: {"id":"x","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}\n\n'
+        done = "data: [DONE]\n\n"
+
+        # Combine all SSE text then split at a byte boundary mid-JSON
+        combined = full_event_1 + full_event_2 + full_event_3 + done
+        split_at = len(full_event_1) + 20  # mid-way through event_2's JSON
+        http_chunk_1 = combined[:split_at]
+        http_chunk_2 = combined[split_at:]
+
+        fake_upstream = FakeUpstreamResponse(status_code=200, chunks=[http_chunk_1, http_chunk_2])
+
+        mock_client = AsyncMock(spec=AsyncClient)
+        mock_client.build_request = MagicMock(return_value=MagicMock())
+        mock_client.send = AsyncMock(return_value=fake_upstream)
+
+        with patch("app.core.proxy.trace_proxy_request") as mock_trace, \
+             patch("app.core.proxy.settings") as mock_settings:
+            _configure_settings(mock_settings)
+            mock_settings.tracing_log_io = True
+            mock_settings.billing_enabled = False
+
+            response = await proxy_request_with_retries(
+                client=mock_client, path="v1/chat/completions",
+                request=request, custom_headers={},
+            )
+            async for _ in response.body_iterator:
+                pass
+
+        mock_trace.assert_called_once()
+        output_body = mock_trace.call_args.kwargs["output_body"]
+        assert output_body["choices"][0]["message"]["content"] == "SplitChunk"
+        assert output_body["usage"]["total_tokens"] == 3

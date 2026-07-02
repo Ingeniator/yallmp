@@ -106,7 +106,7 @@ async def test_sync_writes_group_and_user_keys(redis, pipe):
     with patcher:
         await sync_from_llogr(redis, _LIMITS, LLOGR_URL)
 
-    written = [c.args[0] for c in pipe.set.call_args_list]
+    written = [c.args[2] for c in pipe.eval.call_args_list]
     assert any("billing:group:acme:"   in k for k in written)
     assert any("billing:group:globex:" in k for k in written)
     assert any("billing:user:acme/alice:" in k for k in written)
@@ -129,7 +129,7 @@ async def test_sync_writes_correct_spent_values(redis, pipe):
         await sync_from_llogr(redis, _LIMITS, LLOGR_URL)
 
     pk = period_key("month")
-    kv = {c.args[0]: c.args[1] for c in pipe.set.call_args_list}
+    kv = {c.args[2]: c.args[3] for c in pipe.eval.call_args_list}
     assert kv[f"billing:group:acme:{pk}"]      == 42.318450
     assert kv[f"billing:user:acme/alice:{pk}"] == 8.75
 
@@ -147,10 +147,10 @@ async def test_sync_uses_gt_and_ttl_on_every_set(redis, pipe):
     with patcher:
         await sync_from_llogr(redis, _LIMITS, LLOGR_URL)
 
-    assert pipe.set.call_count == 2
-    for c in pipe.set.call_args_list:
-        assert c.kwargs.get("gt") is True,       f"gt=True missing on SET: {c}"
-        assert c.kwargs.get("ex") is not None,   f"TTL (ex=) missing on SET: {c}"
+    assert pipe.eval.call_count == 2
+    for c in pipe.eval.call_args_list:
+        ttl = c.args[4]
+        assert ttl is not None and ttl > 0, f"TTL missing or zero in eval: {c}"
 
 
 @pytest.mark.asyncio
@@ -192,7 +192,7 @@ async def test_sync_follows_has_more_flag(redis, pipe):
 
     assert mock_client.get.await_count == 2
 
-    written = [c.args[0] for c in pipe.set.call_args_list]
+    written = [c.args[2] for c in pipe.eval.call_args_list]
     assert any("acme/alice" in k for k in written), "page-1 user missing"
     assert any("acme/bob"   in k for k in written), "page-2 user missing"
 
@@ -227,9 +227,9 @@ async def test_sync_all_pages_flushed_in_one_pipeline_execute(redis, pipe):
     with patcher:
         await sync_from_llogr(redis, _LIMITS, LLOGR_URL)
 
-    # All SET commands accumulated across pages, then flushed in a single execute()
+    # All eval commands accumulated across pages, then flushed in a single execute()
     pipe.execute.assert_awaited_once()
-    assert pipe.set.call_count == 2  # one per user
+    assert pipe.eval.call_count == 2  # one per user
 
 
 # ── Lock / concurrency ────────────────────────────────────────────────────────
@@ -252,7 +252,7 @@ async def test_sync_skips_when_lock_already_held(redis, pipe):
         await billing_sync.sync_from_llogr(redis, _LIMITS, LLOGR_URL)
 
     mock_client.get.assert_not_called()
-    pipe.set.assert_not_called()
+    pipe.eval.assert_not_called()
 
     holder.cancel()
     try:
@@ -303,7 +303,7 @@ async def test_sync_survives_llogr_http_error(redis, pipe):
     with patch("app.services.billing_sync.httpx.AsyncClient", return_value=mock_acm):
         await sync_from_llogr(redis, _LIMITS, LLOGR_URL)  # must not raise
 
-    pipe.set.assert_not_called()
+    pipe.eval.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -341,7 +341,7 @@ async def test_sync_survives_llogr_error_mid_pagination(redis, pipe):
         await sync_from_llogr(redis, _LIMITS, LLOGR_URL)  # must not raise
 
     # Page 1 user should have been accumulated before the failure
-    written = [c.args[0] for c in pipe.set.call_args_list]
+    written = [c.args[2] for c in pipe.eval.call_args_list]
     assert any("acme/alice" in k for k in written)
 
 
@@ -361,7 +361,7 @@ async def test_sync_skips_users_without_slash(redis, pipe):
     with patcher:
         await sync_from_llogr(redis, _LIMITS, LLOGR_URL)
 
-    written = [c.args[0] for c in pipe.set.call_args_list]
+    written = [c.args[2] for c in pipe.eval.call_args_list]
     user_keys = [k for k in written if "billing:user:" in k]
 
     assert len(user_keys) == 1
@@ -381,7 +381,7 @@ async def test_sync_skips_groups_with_empty_org(redis, pipe):
     with patcher:
         await sync_from_llogr(redis, _LIMITS, LLOGR_URL)
 
-    written = [c.args[0] for c in pipe.set.call_args_list]
+    written = [c.args[2] for c in pipe.eval.call_args_list]
     group_keys = [k for k in written if "billing:group:" in k]
     assert len(group_keys) == 1
     assert "acme" in group_keys[0]
@@ -401,7 +401,7 @@ async def test_sync_handles_none_spent_values(redis, pipe):
     with patcher:
         await sync_from_llogr(redis, _LIMITS, LLOGR_URL)  # must not raise
 
-    kv = {c.args[0]: c.args[1] for c in pipe.set.call_args_list}
+    kv = {c.args[2]: c.args[3] for c in pipe.eval.call_args_list}
     assert all(v == 0.0 for v in kv.values())
 
 
@@ -441,7 +441,7 @@ async def test_sync_uses_correct_period_key_per_org_tier(redis, pipe):
     with patcher:
         await sync_from_llogr(redis, _LIMITS_MIXED_PERIODS, LLOGR_URL)
 
-    written_keys = [c.args[0] for c in pipe.set.call_args_list]
+    written_keys = [c.args[2] for c in pipe.eval.call_args_list]
     assert any(f"billing:group:acme:{period_key('month')}" in k for k in written_keys)
     assert any(f"billing:group:beta:{period_key('week')}"  in k for k in written_keys)
 

@@ -25,7 +25,11 @@ class TestGetEmitter:
         mock_emitter = MagicMock()
         with patch("app.services.tracing.settings") as mock_settings, \
              patch("app.services.tracing.logger"), \
-             patch.dict("sys.modules", {"langfuse": MagicMock()}), \
+             patch.dict("sys.modules", {
+                 "langfuse": MagicMock(),
+                 "langfuse._client": MagicMock(),
+                 "langfuse._client.attributes": MagicMock(),
+             }), \
              patch("app.services.langfuse_tracing.LangfuseEmitter", return_value=mock_emitter):
             mock_settings.tracing_enabled = True
             mock_settings.tracing_backend = "langfuse"
@@ -111,6 +115,10 @@ class TestTraceProxyRequest:
             trace_id=None,
             tools_defined=None,
             tool_calls=None,
+            agent_name=None,
+            completion_start_time=None,
+            prompt_name=None,
+            prompt_version=None,
         )
 
     def test_strips_io_when_log_io_false(self):
@@ -202,7 +210,7 @@ class TestGetLangchainCallback:
 
         with patch.dict("sys.modules", {
             "langfuse": MagicMock(Langfuse=MagicMock(return_value=mock_langfuse)),
-            "langfuse.callback": MagicMock(CallbackHandler=MagicMock(return_value=mock_handler)),
+            "langfuse.langchain": MagicMock(CallbackHandler=MagicMock(return_value=mock_handler)),
         }):
             emitter = LangfuseEmitter()
             cb = emitter.get_langchain_callback(

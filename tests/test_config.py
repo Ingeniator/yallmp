@@ -1,8 +1,13 @@
 from app.core.config import AppSettings
 
 
-def test_default_values():
-    s = AppSettings()
+def test_default_values(monkeypatch):
+    # Clear env vars that the local .env may set so we get true defaults
+    for key in ("LLM_DEBUG", "LLM_PORT", "LLM_PROXY_ENABLED", "LLM_PROXY_TARGET_URL",
+                "LLM_PROXY_AUTHORIZATION_TYPE", "LLM_PROXY_PRICING_CONFIG",
+                "LLM_DASHBOARD_ENABLED", "LLM_SEARCH_HUB_ENABLED", "EXA_API_KEY"):
+        monkeypatch.delenv(key, raising=False)
+    s = AppSettings(_env_file=None)
     assert s.app_name == "LLM-Proxy"
     assert s.root_path == "/ai"
     assert s.debug is False
