@@ -528,8 +528,16 @@ def test_is_traceable_path_responses():
     assert _is_traceable_path("v1/responses") is True
 
 
-def test_is_traceable_path_embeddings_untouched():
-    assert _is_traceable_path("v1/embeddings") is False
+def test_is_traceable_path_embeddings():
+    assert _is_traceable_path("v1/embeddings") is True
+
+
+def test_is_traceable_path_images_untouched():
+    assert _is_traceable_path("v1/images/generations") is False
+
+
+def test_is_traceable_path_audio_untouched():
+    assert _is_traceable_path("v1/audio/transcriptions") is False
 
 
 # --- _unwrap_responses_event ---

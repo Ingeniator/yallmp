@@ -457,9 +457,12 @@ def _normalize_usage(usage: dict | None) -> dict | None:
 
 def _is_traceable_path(path: str) -> bool:
     """Paths whose response body we know how to parse for usage/cost — Chat
-    Completions and the Responses API. Other endpoints (embeddings, files,
-    etc.) are proxied untouched."""
-    return "completions" in path or "responses" in path
+    Completions, the Responses API, and Embeddings all return a token-based
+    ``usage`` object the pricing/tracing pipeline already understands (embeddings
+    just have no completion_tokens, so output cost comes out as 0). Endpoints
+    billed on non-token units (images, audio, moderations, files, etc.) are
+    proxied untouched — they need a different cost model, not this path."""
+    return "completions" in path or "responses" in path or "embeddings" in path
 
 
 def _unwrap_responses_event(payload: dict) -> tuple[dict, bool]:
