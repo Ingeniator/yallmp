@@ -400,8 +400,10 @@ def _extract_tools_defined(input_body: dict | None) -> list[str]:
     for t in input_body.get("tools", []):
         if not isinstance(t, dict):
             continue
-        fn = t.get("function", {})
-        name = fn.get("name") if isinstance(fn, dict) else None
+        fn = t.get("function")
+        # Chat Completions nests the name under "function"; the Responses API
+        # puts function tools at the top level instead.
+        name = fn.get("name") if isinstance(fn, dict) else t.get("name")
         if name:
             names.append(name)
     return names
@@ -415,6 +417,63 @@ def _extract_tool_calls(choices: list) -> list[str]:
             if name:
                 names.append(name)
     return names
+
+
+def _extract_output_tool_calls(output: list) -> list[str]:
+    """Function-call names from a Responses API ``output`` array."""
+    names = []
+    for item in output or []:
+        if isinstance(item, dict) and item.get("type") == "function_call":
+            name = item.get("name")
+            if name:
+                names.append(name)
+    return names
+
+
+def _tool_calls_from_response(response_data: dict) -> list[str]:
+    """Dispatch to the Chat Completions or Responses API tool-call extractor,
+    based on which shape the response body has."""
+    if "choices" in response_data:
+        return _extract_tool_calls(response_data.get("choices", []))
+    return _extract_output_tool_calls(response_data.get("output", []))
+
+
+def _normalize_usage(usage: dict | None) -> dict | None:
+    """Alias Responses API usage field names (input_tokens/output_tokens) to
+    the Chat Completions names (prompt_tokens/completion_tokens) that the
+    pricing cache and Prometheus metrics code are written against."""
+    if not usage or "prompt_tokens" in usage:
+        return usage
+    normalized = dict(usage)
+    if "input_tokens" in usage:
+        normalized["prompt_tokens"] = usage["input_tokens"]
+    if "output_tokens" in usage:
+        normalized["completion_tokens"] = usage["output_tokens"]
+    reasoning = (usage.get("output_tokens_details") or {}).get("reasoning_tokens")
+    if reasoning is not None:
+        normalized["completion_tokens_details"] = {"reasoning_tokens": reasoning}
+    return normalized
+
+
+def _is_traceable_path(path: str) -> bool:
+    """Paths whose response body we know how to parse for usage/cost — Chat
+    Completions and the Responses API. Other endpoints (embeddings, files,
+    etc.) are proxied untouched."""
+    return "completions" in path or "responses" in path
+
+
+def _unwrap_responses_event(payload: dict) -> tuple[dict, bool]:
+    """Responses API SSE events wrap the actual response object under a
+    "response" key (e.g. {"type": "response.completed", "response": {...}}),
+    unlike Chat Completions chunks, which are already response-shaped.
+
+    Returns (unwrapped_payload, is_responses_api).
+    """
+    event_type = payload.get("type")
+    response = payload.get("response")
+    if isinstance(event_type, str) and event_type.startswith("response.") and isinstance(response, dict):
+        return response, True
+    return payload, False
 
 
 def _extract_streaming_tool_calls(full_text: str) -> list[str]:
@@ -447,9 +506,12 @@ def _emit_completions_metrics(
     currency: str | None,
     pricing_cache,
 ) -> None:
-    """Emit Prometheus metrics and tracing for a non-streaming completions response."""
-    if "completions" not in path:
+    """Emit Prometheus metrics and tracing for a non-streaming completions/responses request."""
+    if not _is_traceable_path(path):
         return
+
+    if response_data.get("usage"):
+        response_data = {**response_data, "usage": _normalize_usage(response_data["usage"])}
 
     metadata = ChainMetadataForTracking(
         chain_type=ChainType.prompt,
@@ -512,7 +574,7 @@ def _emit_completions_metrics(
         session_id=request.headers.get("x-session-id"),
         trace_id=request.headers.get("x-request-id"),
         tools_defined=_extract_tools_defined(input_body),
-        tool_calls=_extract_tool_calls(response_data.get("choices", [])),
+        tool_calls=_tool_calls_from_response(response_data),
         agent_name=_resolve_agent_name(request),
         tags=_parse_tags_header(request.headers.get("x-tags")),
         prompt_name=request.headers.get("x-prompt-name") or None,
@@ -597,7 +659,7 @@ async def _do_proxy_request(
     if isinstance(response, HTTPXResponse) and response.status_code in _SUCCESS_STATUS_CODES:
         logger.debug(f"Proxy request successful: {method} {target_url} -> {response.status_code}")
 
-        if "completions" in path:
+        if _is_traceable_path(path):
             response_data = json.loads(response.text)
             _emit_completions_metrics(
                 response_data, request, start_time, body, path,
@@ -704,7 +766,7 @@ async def _handle_streaming_request(
         finally:
             await upstream_response.aclose()
             # Parse collected SSE data for metrics
-            if "completions" in path:
+            if _is_traceable_path(path):
                 _emit_streaming_metrics(
                     collected_chunks, request, start_time, body,
                     provider_prefix, provider_currency, pricing_cache,
@@ -790,7 +852,9 @@ def _emit_streaming_metrics(
                 last_data = stripped[len("data:"):].strip()
 
         if last_data:
-            last_payload = json.loads(last_data)
+            last_payload, is_responses_api = _unwrap_responses_event(json.loads(last_data))
+            if last_payload.get("usage"):
+                last_payload = {**last_payload, "usage": _normalize_usage(last_payload["usage"])}
 
             try:
                 input_body = json.loads(body) if body else None
@@ -840,11 +904,19 @@ def _emit_streaming_metrics(
                 datetime.fromtimestamp(first_chunk_time, tz=timezone.utc)
                 if first_chunk_time else None
             )
+            output_body = (
+                last_payload if is_responses_api
+                else _assemble_streaming_output(full_text, last_payload)
+            )
+            tool_calls = (
+                _tool_calls_from_response(last_payload) if is_responses_api
+                else _extract_streaming_tool_calls(full_text)
+            )
             trace_proxy_request(
                 model=last_payload.get("model", ""),
                 provider=pfx,
                 input_body=input_body,
-                output_body=_assemble_streaming_output(full_text, last_payload),
+                output_body=output_body,
                 status_code=200,
                 usage=last_payload.get("usage"),
                 duration_ms=duration_ms,
@@ -854,7 +926,7 @@ def _emit_streaming_metrics(
                 session_id=request.headers.get("x-session-id"),
                 trace_id=request.headers.get("x-request-id"),
                 tools_defined=_extract_tools_defined(input_body),
-                tool_calls=_extract_streaming_tool_calls(full_text),
+                tool_calls=tool_calls,
                 agent_name=_resolve_agent_name(request),
                 tags=_parse_tags_header(request.headers.get("x-tags")),
                 completion_start_time=completion_start_time,
