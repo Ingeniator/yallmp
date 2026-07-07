@@ -11,6 +11,11 @@ from app.core.proxy import (
     _extract_tools_defined,
     _extract_tool_calls,
     _extract_streaming_tool_calls,
+    _extract_output_tool_calls,
+    _tool_calls_from_response,
+    _normalize_usage,
+    _is_traceable_path,
+    _unwrap_responses_event,
     get_model_version,
     proxy_request_with_retries,
     stream_multipart_post,
@@ -438,6 +443,117 @@ def test_extract_tools_defined_skips_malformed():
         ]
     }
     assert _extract_tools_defined(input_body) == ["valid"]
+
+
+def test_extract_tools_defined_responses_api_flat_format():
+    """Responses API tools put "name" at the top level, not nested under "function"."""
+    input_body = {
+        "tools": [
+            {"type": "function", "name": "get_weather", "parameters": {}},
+            {"type": "function", "name": "search_web"},
+        ]
+    }
+    assert _extract_tools_defined(input_body) == ["get_weather", "search_web"]
+
+
+# --- _extract_output_tool_calls / _tool_calls_from_response ---
+
+
+def test_extract_output_tool_calls_empty():
+    assert _extract_output_tool_calls([]) == []
+
+
+def test_extract_output_tool_calls_single():
+    output = [
+        {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "hi"}]},
+        {"type": "function_call", "name": "get_weather", "arguments": "{}", "call_id": "call_1"},
+    ]
+    assert _extract_output_tool_calls(output) == ["get_weather"]
+
+
+def test_extract_output_tool_calls_skips_non_function_call_items():
+    output = [{"type": "message", "role": "assistant"}, "not-a-dict"]
+    assert _extract_output_tool_calls(output) == []
+
+
+def test_tool_calls_from_response_dispatches_chat_completions():
+    response_data = {"choices": [{"message": {"tool_calls": [{"function": {"name": "fn_a"}}]}}]}
+    assert _tool_calls_from_response(response_data) == ["fn_a"]
+
+
+def test_tool_calls_from_response_dispatches_responses_api():
+    response_data = {"output": [{"type": "function_call", "name": "fn_b"}]}
+    assert _tool_calls_from_response(response_data) == ["fn_b"]
+
+
+# --- _normalize_usage ---
+
+
+def test_normalize_usage_none():
+    assert _normalize_usage(None) is None
+
+
+def test_normalize_usage_passes_through_chat_completions_shape():
+    usage = {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}
+    assert _normalize_usage(usage) == usage
+
+
+def test_normalize_usage_aliases_responses_api_shape():
+    usage = {"input_tokens": 10, "output_tokens": 4, "total_tokens": 14}
+    normalized = _normalize_usage(usage)
+    assert normalized["prompt_tokens"] == 10
+    assert normalized["completion_tokens"] == 4
+    assert normalized["input_tokens"] == 10  # original keys preserved
+    assert normalized["output_tokens"] == 4
+
+
+def test_normalize_usage_aliases_reasoning_tokens():
+    usage = {
+        "input_tokens": 10,
+        "output_tokens": 4,
+        "output_tokens_details": {"reasoning_tokens": 2},
+    }
+    normalized = _normalize_usage(usage)
+    assert normalized["completion_tokens_details"]["reasoning_tokens"] == 2
+
+
+# --- _is_traceable_path ---
+
+
+def test_is_traceable_path_chat_completions():
+    assert _is_traceable_path("v1/chat/completions") is True
+
+
+def test_is_traceable_path_responses():
+    assert _is_traceable_path("v1/responses") is True
+
+
+def test_is_traceable_path_embeddings_untouched():
+    assert _is_traceable_path("v1/embeddings") is False
+
+
+# --- _unwrap_responses_event ---
+
+
+def test_unwrap_responses_event_completed():
+    payload = {"type": "response.completed", "response": {"id": "resp_1", "model": "gpt-x", "usage": {}}}
+    unwrapped, is_responses_api = _unwrap_responses_event(payload)
+    assert is_responses_api is True
+    assert unwrapped == {"id": "resp_1", "model": "gpt-x", "usage": {}}
+
+
+def test_unwrap_responses_event_chat_completions_passthrough():
+    payload = {"id": "1", "choices": [{"delta": {"content": "hi"}}]}
+    unwrapped, is_responses_api = _unwrap_responses_event(payload)
+    assert is_responses_api is False
+    assert unwrapped is payload
+
+
+def test_unwrap_responses_event_missing_response_key():
+    payload = {"type": "response.output_text.delta", "delta": "hi"}
+    unwrapped, is_responses_api = _unwrap_responses_event(payload)
+    assert is_responses_api is False
+    assert unwrapped is payload
 
 
 # --- _extract_tool_calls ---

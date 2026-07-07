@@ -550,3 +550,129 @@ class TestStreamingPipelineEndToEnd:
         output_body = mock_trace.call_args.kwargs["output_body"]
         assert output_body["choices"][0]["message"]["content"] == "SplitChunk"
         assert output_body["usage"]["total_tokens"] == 3
+
+
+# ---------------------------------------------------------------------------
+# Responses API tracing — v1/responses is traced like chat/completions
+# ---------------------------------------------------------------------------
+
+class TestResponsesApiTracing:
+    """The Responses API (v1/responses) was previously ignored by tracing
+    because it doesn't match "completions" — verify it's now traced, with
+    usage/tool-calls correctly extracted from its distinct response shape."""
+
+    def _make_request(self, body: bytes = b""):
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/llm/v1/responses",
+            "query_string": b"",
+            "headers": [
+                (b"host", b"localhost"),
+                (b"x-group-id", b"test-group"),
+            ],
+            "root_path": "",
+        }
+        return Request(scope, receive=AsyncMock(return_value={"type": "http.request", "body": body}))
+
+    @pytest.mark.asyncio
+    async def test_non_streaming_response_is_traced(self):
+        from app.core.proxy import proxy_request_with_retries
+
+        input_body = {"model": "gpt-x", "input": "hi", "stream": False}
+        body = json.dumps(input_body).encode()
+        request = self._make_request(body=body)
+
+        response_json = {
+            "id": "resp_1",
+            "object": "response",
+            "model": "gpt-x",
+            "status": "completed",
+            "output": [
+                {"type": "function_call", "name": "get_weather", "arguments": "{}", "call_id": "call_1"},
+            ],
+            "usage": {"input_tokens": 10, "output_tokens": 4, "total_tokens": 14},
+        }
+        mock_response = HTTPXResponse(
+            status_code=200,
+            json=response_json,
+            request=HTTPXRequest("POST", "http://upstream/v1/responses"),
+        )
+        mock_client = AsyncMock(spec=AsyncClient)
+        mock_client.request = AsyncMock(return_value=mock_response)
+
+        with patch("app.core.proxy.trace_proxy_request") as mock_trace, \
+             patch("app.core.proxy.settings") as mock_settings:
+            _configure_settings(mock_settings)
+            mock_settings.tracing_log_io = True
+            mock_settings.billing_enabled = False
+
+            await proxy_request_with_retries(
+                client=mock_client, path="v1/responses",
+                request=request, custom_headers={},
+            )
+
+        mock_trace.assert_called_once()
+        kwargs = mock_trace.call_args.kwargs
+        assert kwargs["model"] == "gpt-x"
+        assert kwargs["usage"]["prompt_tokens"] == 10
+        assert kwargs["usage"]["completion_tokens"] == 4
+        assert kwargs["tool_calls"] == ["get_weather"]
+
+    @pytest.mark.asyncio
+    async def test_streaming_response_is_traced(self):
+        """The final response.completed SSE event carries the whole final
+        response object, so it's used directly as output_body — no delta
+        assembly needed, unlike Chat Completions streaming."""
+        from app.core.proxy import proxy_request_with_retries
+
+        input_body = {"model": "gpt-x", "input": "hi", "stream": True}
+        body = json.dumps(input_body).encode()
+        request = self._make_request(body=body)
+
+        final_response = {
+            "id": "resp_1",
+            "object": "response",
+            "model": "gpt-x",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Hello world"}],
+                },
+            ],
+            "usage": {"input_tokens": 8, "output_tokens": 3, "total_tokens": 11},
+        }
+        sse_chunks = [
+            'data: {"type":"response.output_text.delta","delta":"Hello"}\n\n',
+            'data: {"type":"response.output_text.delta","delta":" world"}\n\n',
+            f'data: {json.dumps({"type": "response.completed", "response": final_response})}\n\n',
+        ]
+        fake_upstream = FakeUpstreamResponse(status_code=200, chunks=sse_chunks)
+
+        mock_client = AsyncMock(spec=AsyncClient)
+        mock_client.build_request = MagicMock(return_value=MagicMock())
+        mock_client.send = AsyncMock(return_value=fake_upstream)
+
+        with patch("app.core.proxy.trace_proxy_request") as mock_trace, \
+             patch("app.core.proxy.settings") as mock_settings:
+            _configure_settings(mock_settings)
+            mock_settings.tracing_log_io = True
+            mock_settings.billing_enabled = False
+
+            response = await proxy_request_with_retries(
+                client=mock_client, path="v1/responses",
+                request=request, custom_headers={},
+            )
+            async for _ in response.body_iterator:
+                pass
+
+        mock_trace.assert_called_once()
+        kwargs = mock_trace.call_args.kwargs
+        output_body = kwargs["output_body"]
+        assert output_body["id"] == "resp_1"
+        assert output_body["output"] == final_response["output"]
+        assert kwargs["usage"]["prompt_tokens"] == 8
+        assert kwargs["usage"]["completion_tokens"] == 3
+        assert kwargs["model"] == "gpt-x"
