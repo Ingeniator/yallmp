@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 import opentelemetry.trace as otel_trace_api
-from langfuse import Langfuse, LangfuseGeneration, LangfuseSpan, propagate_attributes
+from langfuse import Langfuse, LangfuseGeneration, LangfuseSpan
 from langfuse._client.attributes import LangfuseOtelSpanAttributes
 
 from app.core.config import settings
@@ -192,38 +192,46 @@ class LangfuseEmitter:
             )
             otel_context = otel_trace_api.set_span_in_context(remote_parent)
 
-        with propagate_attributes(session_id=session_id or None, user_id=user_id, tags=tags):
-            with client._otel_tracer.start_as_current_span(
-                name=trace_name,
-                context=otel_context,   # None → use ambient OTEL context
-                start_time=start_time_ns,
-                end_on_exit=False,      # we call end() ourselves with the correct ns
-            ) as otel_span:
-                if valid_trace_id:
-                    # Mirror what Langfuse sets in _create_span_with_parent_context so the
-                    # backend renders this as a root-level trace, not a dangling child.
-                    otel_span.set_attribute(_LANGFUSE_AS_ROOT_ATTR, True)
-                if prompt_name:
-                    otel_span.set_attribute(LangfuseOtelSpanAttributes.OBSERVATION_PROMPT_NAME, prompt_name)
-                if prompt_version:
-                    otel_span.set_attribute(LangfuseOtelSpanAttributes.OBSERVATION_PROMPT_VERSION, str(prompt_version))
-                gen = LangfuseGeneration(
-                    otel_span=otel_span,
-                    langfuse_client=client,
-                    environment=getattr(client, "_environment", None),
-                    release=getattr(client, "_release", None),
-                    input=input_body,
-                    output=output_body,
-                    metadata=metadata,
-                    usage_details=usage_details or None,
-                    cost_details=cost_details,
-                    completion_start_time=completion_start_time,
-                    model=model,
-                    model_parameters=model_parameters,
-                    level=level,
-                    status_message=status_message,
-                )
-                gen.end(end_time=end_time_ns)  # → otel_span.end(end_time=ns) internally
+        with client._otel_tracer.start_as_current_span(
+            name=trace_name,
+            context=otel_context,   # None → use ambient OTEL context
+            start_time=start_time_ns,
+            end_on_exit=False,      # we call end() ourselves with the correct ns
+        ) as otel_span:
+            if valid_trace_id:
+                # Mirror what Langfuse sets in _create_span_with_parent_context so the
+                # backend renders this as a root-level trace, not a dangling child.
+                otel_span.set_attribute(_LANGFUSE_AS_ROOT_ATTR, True)
+            # Set directly on the span rather than via propagate_attributes: that
+            # helper only cascades through the *ambient* OTEL context, which gets
+            # replaced wholesale above whenever we stitch onto an explicit trace_id.
+            if session_id:
+                otel_span.set_attribute(LangfuseOtelSpanAttributes.TRACE_SESSION_ID, session_id)
+            if user_id:
+                otel_span.set_attribute(LangfuseOtelSpanAttributes.TRACE_USER_ID, user_id)
+            if tags:
+                otel_span.set_attribute(LangfuseOtelSpanAttributes.TRACE_TAGS, tags)
+            if prompt_name:
+                otel_span.set_attribute(LangfuseOtelSpanAttributes.OBSERVATION_PROMPT_NAME, prompt_name)
+            if prompt_version:
+                otel_span.set_attribute(LangfuseOtelSpanAttributes.OBSERVATION_PROMPT_VERSION, str(prompt_version))
+            gen = LangfuseGeneration(
+                otel_span=otel_span,
+                langfuse_client=client,
+                environment=getattr(client, "_environment", None),
+                release=getattr(client, "_release", None),
+                input=input_body,
+                output=output_body,
+                metadata=metadata,
+                usage_details=usage_details or None,
+                cost_details=cost_details,
+                completion_start_time=completion_start_time,
+                model=model,
+                model_parameters=model_parameters,
+                level=level,
+                status_message=status_message,
+            )
+            gen.end(end_time=end_time_ns)  # → otel_span.end(end_time=ns) internally
 
     def trace_search_request(
         self,
@@ -267,37 +275,41 @@ class LangfuseEmitter:
             )
             otel_context = otel_trace_api.set_span_in_context(remote_parent)
 
-        with propagate_attributes(session_id=session_id or None):
-            with client._otel_tracer.start_as_current_span(
-                name=f"search:{provider}",
-                context=otel_context,
-                start_time=start_time_ns,
-                end_on_exit=False,
-            ) as otel_span:
-                if valid_trace_id:
-                    otel_span.set_attribute(_LANGFUSE_AS_ROOT_ATTR, True)
-                span = LangfuseSpan(
-                    otel_span=otel_span,
-                    langfuse_client=client,
-                    environment=getattr(client, "_environment", None),
-                    release=getattr(client, "_release", None),
-                    input={"query": query} if query is not None else None,
-                    output={"result_count": result_count},
-                    metadata=metadata,
-                )
-                # LangfuseSpan constructor doesn't accept usage_details / cost_details
-                # (those are generation-only params). Set the underlying OTEL attributes
-                # directly — same JSON encoding that create_generation_attributes uses.
+        with client._otel_tracer.start_as_current_span(
+            name=f"search:{provider}",
+            context=otel_context,
+            start_time=start_time_ns,
+            end_on_exit=False,
+        ) as otel_span:
+            if valid_trace_id:
+                otel_span.set_attribute(_LANGFUSE_AS_ROOT_ATTR, True)
+            # Set directly on the span — propagate_attributes only cascades through the
+            # ambient OTEL context, which gets replaced wholesale above whenever we
+            # stitch onto an explicit trace_id.
+            if session_id:
+                otel_span.set_attribute(LangfuseOtelSpanAttributes.TRACE_SESSION_ID, session_id)
+            span = LangfuseSpan(
+                otel_span=otel_span,
+                langfuse_client=client,
+                environment=getattr(client, "_environment", None),
+                release=getattr(client, "_release", None),
+                input={"query": query} if query is not None else None,
+                output={"result_count": result_count},
+                metadata=metadata,
+            )
+            # LangfuseSpan constructor doesn't accept usage_details / cost_details
+            # (those are generation-only params). Set the underlying OTEL attributes
+            # directly — same JSON encoding that create_generation_attributes uses.
+            otel_span.set_attribute(
+                LangfuseOtelSpanAttributes.OBSERVATION_USAGE_DETAILS,
+                json.dumps({"total": 1, "unit": "SEARCHES"}),
+            )
+            if cost_details:
                 otel_span.set_attribute(
-                    LangfuseOtelSpanAttributes.OBSERVATION_USAGE_DETAILS,
-                    json.dumps({"total": 1, "unit": "SEARCHES"}),
+                    LangfuseOtelSpanAttributes.OBSERVATION_COST_DETAILS,
+                    json.dumps(cost_details),
                 )
-                if cost_details:
-                    otel_span.set_attribute(
-                        LangfuseOtelSpanAttributes.OBSERVATION_COST_DETAILS,
-                        json.dumps(cost_details),
-                    )
-                span.end(end_time=end_time_ns)
+            span.end(end_time=end_time_ns)
 
     async def score(
         self,
