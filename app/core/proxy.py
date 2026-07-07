@@ -11,6 +11,7 @@ from app.services.metrics_callback_handler import MetricsCallbackHandler
 from app.schemas.prompt import ChainMetadataForTracking, ChainType
 import json
 import fnmatch
+import re
 from typing import AsyncIterator
 from app.core.security import redact_headers
 from app.services.tracing import trace_proxy_request
@@ -347,6 +348,51 @@ def _detect_streaming(method: str, body: bytes) -> bool:
     return False
 
 
+def _parse_tags_header(raw: str | None) -> list[str] | None:
+    if not raw:
+        return None
+    tags = [t.strip() for t in raw.split(",") if t.strip()]
+    return tags or None
+
+
+# Known coding-agent CLI signatures found in the standard User-Agent header,
+# used to auto-detect the calling agent when X-Agent-Name isn't set.
+_CLI_AGENT_USER_AGENT_PATTERNS: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"claude-cli|claude-code", re.I), "claude-code"),
+    (re.compile(r"\baider\b", re.I), "aider"),
+    (re.compile(r"\bcursor\b", re.I), "cursor"),
+    (re.compile(r"\bcontinue\b", re.I), "continue"),
+    (re.compile(r"\bcline\b", re.I), "cline"),
+    (re.compile(r"\bwindsurf\b", re.I), "windsurf"),
+    (re.compile(r"codex-cli|openai-codex", re.I), "codex-cli"),
+    (re.compile(r"\blitellm\b", re.I), "litellm"),
+    (re.compile(r"\blangchain\b", re.I), "langchain"),
+    (re.compile(r"llama[_-]?index", re.I), "llamaindex"),
+    (re.compile(r"openai-python|OpenAI/Python", re.I), "openai-sdk"),
+    (re.compile(r"anthropic-sdk|Anthropic/(?:Python|TypeScript|JS)", re.I), "anthropic-sdk"),
+]
+
+
+def _detect_cli_agent(user_agent: str | None) -> str | None:
+    """Best-effort agent name from a well-known CLI/SDK User-Agent signature."""
+    if not user_agent:
+        return None
+    for pattern, name in _CLI_AGENT_USER_AGENT_PATTERNS:
+        if pattern.search(user_agent):
+            return name
+    return None
+
+
+def _resolve_agent_name(request: Request) -> str | None:
+    """X-Agent-Name wins when set explicitly; otherwise sniff known CLI agents
+    off the standard User-Agent header."""
+    return (
+        request.headers.get("x-agent-name")
+        or _detect_cli_agent(request.headers.get("user-agent"))
+        or None
+    )
+
+
 def _extract_tools_defined(input_body: dict | None) -> list[str]:
     if not input_body:
         return []
@@ -467,7 +513,8 @@ def _emit_completions_metrics(
         trace_id=request.headers.get("x-request-id"),
         tools_defined=_extract_tools_defined(input_body),
         tool_calls=_extract_tool_calls(response_data.get("choices", [])),
-        agent_name=request.headers.get("x-agent-name") or None,
+        agent_name=_resolve_agent_name(request),
+        tags=_parse_tags_header(request.headers.get("x-tags")),
         prompt_name=request.headers.get("x-prompt-name") or None,
         prompt_version=request.headers.get("x-prompt-version") or None,
     )
@@ -808,7 +855,8 @@ def _emit_streaming_metrics(
                 trace_id=request.headers.get("x-request-id"),
                 tools_defined=_extract_tools_defined(input_body),
                 tool_calls=_extract_streaming_tool_calls(full_text),
-                agent_name=request.headers.get("x-agent-name") or None,
+                agent_name=_resolve_agent_name(request),
+                tags=_parse_tags_header(request.headers.get("x-tags")),
                 completion_start_time=completion_start_time,
                 prompt_name=request.headers.get("x-prompt-name") or None,
                 prompt_version=request.headers.get("x-prompt-version") or None,

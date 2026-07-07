@@ -98,6 +98,7 @@ class LangfuseEmitter:
         tools_defined: list[str] | None = None,
         tool_calls: list[str] | None = None,
         agent_name: str | None = None,
+        tags: list[str] | None = None,
         completion_start_time: datetime | None = None,
         prompt_name: str | None = None,
         prompt_version: str | None = None,
@@ -169,7 +170,11 @@ class LangfuseEmitter:
         if group_id and "/" in group_id:
             user_id = group_id.split("/", 1)[1] or None
 
-        tags = [t for t in (provider, agent_name) if t] or None
+        # trace_id is only ever used as a seed for Langfuse's derived/hashed
+        # trace id below — the original value would otherwise be unrecoverable,
+        # so carry it forward as a queryable tag.
+        request_id_tag = f"request_id:{trace_id}" if trace_id else None
+        tags = [t for t in (provider, agent_name, request_id_tag, *(tags or ())) if t] or None
 
         trace_name = model or "llm-proxy"
         valid_trace_id = Langfuse.create_trace_id(seed=trace_id) if trace_id else None
