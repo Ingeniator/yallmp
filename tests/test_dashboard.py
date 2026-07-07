@@ -134,8 +134,6 @@ def _mock_settings():
         proxy_pricing_endpoint = None
         dashboard_dev_role_switcher = False
         version = "0.0.1-test"
-        search_hub_enabled=False
-        dashboard_dev_role_switcher=None
     return S()
 
 
