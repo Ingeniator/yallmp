@@ -32,8 +32,13 @@ class AliasEntry(BaseModel):
 
 
 class PricingInfo(BaseModel):
-    input_cost_per_token: float
-    output_cost_per_token: float
+    input_cost_per_token: float = 0.0
+    output_cost_per_token: float = 0.0
+    # Per-character cost for TTS-style models (e.g. OpenAI tts-1).
+    cost_per_character: float | None = None
+    # Per-image cost for image-generation models, keyed by "{size}:{quality}"
+    # (falls back to plain "{size}" for models like dall-e-2 with no quality tiers).
+    image_cost: dict[str, float] | None = None
 
 
 class LlmProviderConfig(BaseModel):

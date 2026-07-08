@@ -1,6 +1,6 @@
 from fastapi import Request
 from fastapi.responses import JSONResponse
-from starlette.responses import StreamingResponse
+from starlette.responses import Response, StreamingResponse
 from httpx import AsyncClient, ConnectError, RequestError, Timeout, Limits, Response as HTTPXResponse, AsyncByteStream
 import random
 import time
@@ -456,13 +456,39 @@ def _normalize_usage(usage: dict | None) -> dict | None:
 
 
 def _is_traceable_path(path: str) -> bool:
-    """Paths whose response body we know how to parse for usage/cost — Chat
-    Completions, the Responses API, and Embeddings all return a token-based
-    ``usage`` object the pricing/tracing pipeline already understands (embeddings
-    just have no completion_tokens, so output cost comes out as 0). Endpoints
-    billed on non-token units (images, audio, moderations, files, etc.) are
-    proxied untouched — they need a different cost model, not this path."""
+    """Paths whose response body we know how to parse for token-based usage/cost
+    — Chat Completions, the Responses API, and Embeddings all return a
+    ``usage`` object the pricing/tracing pipeline already understands
+    (embeddings just have no completion_tokens, so output cost comes out as 0).
+    Images and TTS are billed per-unit instead — see `_is_image_path` /
+    `_is_speech_path`. Other endpoints (moderations, files, fine-tuning, etc.)
+    are proxied untouched with no cost tracking."""
     return "completions" in path or "responses" in path or "embeddings" in path
+
+
+def _is_image_path(path: str) -> bool:
+    """OpenAI image generation — billed per image at (size, quality) granularity,
+    no token usage to report."""
+    return "images/generations" in path
+
+
+def _is_speech_path(path: str) -> bool:
+    """OpenAI TTS — returns raw audio bytes (no JSON, no usage block); billed
+    per character of input text."""
+    return "audio/speech" in path
+
+
+def _schedule_billing_charge(request: Request, cost) -> None:
+    """Fire-and-forget billing charge, shared by every cost-tracked path."""
+    if cost is None or not settings.billing_enabled:
+        return
+    billing_redis = getattr(request.app.state, "billing_redis", None)
+    billing_limits = getattr(request.app.state, "billing_limits", {})
+    if billing_redis:
+        from app.services.billing import charge
+        asyncio.create_task(
+            charge(billing_redis, billing_limits, request.headers.get("x-group-id", "unknown"), cost.total)
+        )
 
 
 def _unwrap_responses_event(payload: dict) -> tuple[dict, bool]:
@@ -584,12 +610,108 @@ def _emit_completions_metrics(
         prompt_version=request.headers.get("x-prompt-version") or None,
     )
 
-    if cost is not None and settings.billing_enabled:
-        billing_redis = getattr(request.app.state, "billing_redis", None)
-        billing_limits = getattr(request.app.state, "billing_limits", {})
-        if billing_redis:
-            from app.services.billing import charge
-            asyncio.create_task(charge(billing_redis, billing_limits, request.headers.get("x-group-id", "unknown"), cost.total))
+    _schedule_billing_charge(request, cost)
+
+
+def _emit_image_metrics(
+    response_data: dict,
+    request: Request,
+    start_time: float,
+    body: bytes,
+    provider_prefix: str | None,
+    provider_currency: str | None,
+    pricing_cache,
+) -> None:
+    """Emit cost tracking for a /v1/images/generations request — billed per
+    image at (size, quality) granularity since there's no token usage."""
+    try:
+        input_body = json.loads(body) if body else None
+    except (json.JSONDecodeError, AttributeError):
+        input_body = None
+
+    model = (input_body or {}).get("model", "dall-e-2")
+    size = (input_body or {}).get("size", "1024x1024")
+    quality = (input_body or {}).get("quality", "standard")
+    count = len(response_data.get("data") or []) or (input_body or {}).get("n", 1)
+
+    pfx, cur = provider_prefix, provider_currency
+    cost = None
+    if pricing_cache:
+        if pfx is not None:
+            cost = pricing_cache.get_image_cost(pfx, model, size, quality, count)
+        else:
+            found = pricing_cache.find_image_cost(model, size, quality, count)
+            if found:
+                pfx, cur, cost = found
+
+    duration_ms = (time.time() - start_time) * 1000
+    trace_proxy_request(
+        model=model,
+        provider=pfx,
+        input_body=input_body,
+        output_body=response_data,
+        status_code=200,
+        usage=None,
+        duration_ms=duration_ms,
+        group_id=request.headers.get("x-group-id", "unknown"),
+        is_streaming=False,
+        cost=cost,
+        session_id=request.headers.get("x-session-id"),
+        trace_id=request.headers.get("x-request-id"),
+        agent_name=_resolve_agent_name(request),
+        tags=_parse_tags_header(request.headers.get("x-tags")),
+    )
+
+    _schedule_billing_charge(request, cost)
+
+
+def _emit_speech_metrics(
+    request: Request,
+    start_time: float,
+    body: bytes,
+    provider_prefix: str | None,
+    provider_currency: str | None,
+    pricing_cache,
+) -> None:
+    """Emit cost tracking for a /v1/audio/speech (TTS) request — billed per
+    character of input text since the response is raw audio with no usage block."""
+    try:
+        input_body = json.loads(body) if body else None
+    except (json.JSONDecodeError, AttributeError):
+        input_body = None
+
+    model = (input_body or {}).get("model", "")
+    num_characters = len((input_body or {}).get("input", "") or "")
+
+    pfx, cur = provider_prefix, provider_currency
+    cost = None
+    if pricing_cache:
+        if pfx is not None:
+            cost = pricing_cache.get_character_cost(pfx, model, num_characters)
+        else:
+            found = pricing_cache.find_character_cost(model, num_characters)
+            if found:
+                pfx, cur, cost = found
+
+    duration_ms = (time.time() - start_time) * 1000
+    trace_proxy_request(
+        model=model,
+        provider=pfx,
+        input_body=input_body,
+        output_body=None,
+        status_code=200,
+        usage=None,
+        duration_ms=duration_ms,
+        group_id=request.headers.get("x-group-id", "unknown"),
+        is_streaming=False,
+        cost=cost,
+        session_id=request.headers.get("x-session-id"),
+        trace_id=request.headers.get("x-request-id"),
+        agent_name=_resolve_agent_name(request),
+        tags=_parse_tags_header(request.headers.get("x-tags")),
+    )
+
+    _schedule_billing_charge(request, cost)
 
 
 def _make_error_response(response, provider_label: str | None = None) -> JSONResponse:
@@ -629,7 +751,7 @@ async def _do_proxy_request(
     max_retries: int | None = None,
     base_delay: float | None = None,
     backoff_factor: float | None = None,
-) -> JSONResponse | StreamingResponse:
+) -> JSONResponse | Response | StreamingResponse:
     """Core proxy logic shared by legacy single-provider and multi-provider paths."""
     is_streaming = _detect_streaming(method, body)
 
@@ -662,10 +784,26 @@ async def _do_proxy_request(
     if isinstance(response, HTTPXResponse) and response.status_code in _SUCCESS_STATUS_CODES:
         logger.debug(f"Proxy request successful: {method} {target_url} -> {response.status_code}")
 
+        if _is_speech_path(path):
+            # Raw audio bytes — not JSON, so it must bypass extract_content/JSONResponse
+            # entirely or the body gets mangled into a {"detail": ...} text wrapper.
+            _emit_speech_metrics(request, start_time, body, provider_prefix, provider_currency, pricing_cache)
+            return Response(
+                content=response.content,
+                status_code=response.status_code,
+                media_type=response.headers.get("content-type", "application/octet-stream"),
+            )
+
         if _is_traceable_path(path):
             response_data = json.loads(response.text)
             _emit_completions_metrics(
                 response_data, request, start_time, body, path,
+                provider_prefix, provider_currency, pricing_cache,
+            )
+        elif _is_image_path(path):
+            response_data = json.loads(response.text)
+            _emit_image_metrics(
+                response_data, request, start_time, body,
                 provider_prefix, provider_currency, pricing_cache,
             )
 
@@ -937,12 +1075,7 @@ def _emit_streaming_metrics(
                 prompt_version=request.headers.get("x-prompt-version") or None,
             )
 
-            if cost is not None and settings.billing_enabled:
-                billing_redis = getattr(request.app.state, "billing_redis", None)
-                billing_limits = getattr(request.app.state, "billing_limits", {})
-                if billing_redis:
-                    from app.services.billing import charge
-                    asyncio.create_task(charge(billing_redis, billing_limits, request.headers.get("x-group-id", "unknown"), cost.total))
+            _schedule_billing_charge(request, cost)
     except Exception as e:
         logger.error("Error processing streaming LLM usage metrics", exc_info=e)
 

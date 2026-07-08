@@ -15,6 +15,8 @@ from app.core.proxy import (
     _tool_calls_from_response,
     _normalize_usage,
     _is_traceable_path,
+    _is_image_path,
+    _is_speech_path,
     _unwrap_responses_event,
     get_model_version,
     proxy_request_with_retries,
@@ -538,6 +540,25 @@ def test_is_traceable_path_images_untouched():
 
 def test_is_traceable_path_audio_untouched():
     assert _is_traceable_path("v1/audio/transcriptions") is False
+
+
+# --- _is_image_path / _is_speech_path ---
+
+
+def test_is_image_path_matches_generations():
+    assert _is_image_path("v1/images/generations") is True
+
+
+def test_is_image_path_rejects_other_paths():
+    assert _is_image_path("v1/chat/completions") is False
+
+
+def test_is_speech_path_matches_tts():
+    assert _is_speech_path("v1/audio/speech") is True
+
+
+def test_is_speech_path_rejects_transcriptions():
+    assert _is_speech_path("v1/audio/transcriptions") is False
 
 
 # --- _unwrap_responses_event ---

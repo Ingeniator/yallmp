@@ -62,6 +62,13 @@ class PricingCache:
             models[model_id] = PricingInfo(
                 input_cost_per_token=float(costs.get("input_cost_per_token", 0)),
                 output_cost_per_token=float(costs.get("output_cost_per_token", 0)),
+                cost_per_character=(
+                    float(costs["cost_per_character"]) if "cost_per_character" in costs else None
+                ),
+                image_cost=(
+                    {k: float(v) for k, v in costs["image_cost"].items()}
+                    if "image_cost" in costs else None
+                ),
             )
 
         if models:
@@ -143,6 +150,69 @@ class PricingCache:
             if cost is not None:
                 currency = self._currencies.get(prefix, "USD")
                 return prefix, currency, cost
+        return None
+
+    def get_image_cost(
+        self,
+        provider_prefix: str,
+        model_name: str,
+        size: str,
+        quality: str,
+        count: int = 1,
+    ) -> CostBreakdown | None:
+        """Per-image cost for image-generation models (e.g. dall-e-3). The whole
+        amount is booked as `output` — there's no prompt/completion split for a
+        generated image the way there is for tokens."""
+        models = self._cache.get(provider_prefix)
+        if not models:
+            return None
+        pricing = models.get(model_name)
+        if not pricing or not pricing.image_cost:
+            return None
+        per_image = pricing.image_cost.get(f"{size}:{quality}") or pricing.image_cost.get(size)
+        if per_image is None:
+            return None
+        total = per_image * count
+        return CostBreakdown(input=0.0, output=total, total=total)
+
+    def find_image_cost(
+        self,
+        model_name: str,
+        size: str,
+        quality: str,
+        count: int = 1,
+    ) -> tuple[str, str, CostBreakdown] | None:
+        for prefix in self._cache:
+            cost = self.get_image_cost(prefix, model_name, size, quality, count)
+            if cost is not None:
+                return prefix, self._currencies.get(prefix, "USD"), cost
+        return None
+
+    def get_character_cost(
+        self,
+        provider_prefix: str,
+        model_name: str,
+        num_characters: int,
+    ) -> CostBreakdown | None:
+        """Per-character cost for TTS models. Booked entirely as `output`."""
+        models = self._cache.get(provider_prefix)
+        if not models:
+            return None
+        pricing = models.get(model_name)
+        if not pricing or pricing.cost_per_character is None:
+            return None
+        total = pricing.cost_per_character * num_characters
+        return CostBreakdown(input=0.0, output=total, total=total)
+
+    def find_character_cost(
+        self,
+        model_name: str,
+        num_characters: int,
+    ) -> tuple[str, str, CostBreakdown] | None:
+        for prefix in self._cache:
+            cost = self.get_character_cost(prefix, model_name, num_characters)
+            if cost is not None:
+                return prefix, self._currencies.get(prefix, "USD"), cost
         return None
 
     # ------------------------------------------------------------------

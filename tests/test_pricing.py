@@ -90,6 +90,148 @@ def test_get_cost_unknown_model():
 
 
 # ---------------------------------------------------------------------------
+# PricingCache.get_image_cost / find_image_cost
+# ---------------------------------------------------------------------------
+
+def test_get_image_cost_matches_size_and_quality():
+    cache = PricingCache([])
+    cache._cache["openai"] = {
+        "dall-e-3": PricingInfo(image_cost={"1024x1024:hd": 0.08, "1024x1024:standard": 0.04}),
+    }
+    cache._currencies["openai"] = "USD"
+
+    cost = cache.get_image_cost("openai", "dall-e-3", "1024x1024", "hd", count=1)
+    assert cost.total == pytest.approx(0.08)
+    assert cost.input == 0.0
+
+
+def test_get_image_cost_multiple_images_scales_linearly():
+    cache = PricingCache([])
+    cache._cache["openai"] = {"dall-e-3": PricingInfo(image_cost={"1024x1024:hd": 0.08})}
+
+    cost = cache.get_image_cost("openai", "dall-e-3", "1024x1024", "hd", count=3)
+    assert cost.total == pytest.approx(0.24)
+
+
+def test_get_image_cost_falls_back_to_size_only_key():
+    """dall-e-2 has no quality tiers — pricing may be keyed by size alone."""
+    cache = PricingCache([])
+    cache._cache["openai"] = {"dall-e-2": PricingInfo(image_cost={"1024x1024": 0.02})}
+
+    cost = cache.get_image_cost("openai", "dall-e-2", "1024x1024", "standard", count=1)
+    assert cost.total == pytest.approx(0.02)
+
+
+def test_get_image_cost_unknown_size_quality_returns_none():
+    cache = PricingCache([])
+    cache._cache["openai"] = {"dall-e-3": PricingInfo(image_cost={"1024x1024:hd": 0.08})}
+
+    assert cache.get_image_cost("openai", "dall-e-3", "512x512", "hd", count=1) is None
+
+
+def test_get_image_cost_model_without_image_cost_returns_none():
+    cache = PricingCache([])
+    cache._cache["openai"] = {"gpt-4o": PricingInfo(input_cost_per_token=0.001, output_cost_per_token=0.002)}
+
+    assert cache.get_image_cost("openai", "gpt-4o", "1024x1024", "hd", count=1) is None
+
+
+def test_find_image_cost_searches_all_providers():
+    cache = PricingCache([])
+    cache._cache["other"] = {"llama3": PricingInfo(input_cost_per_token=0.1, output_cost_per_token=0.2)}
+    cache._cache["openai"] = {"dall-e-3": PricingInfo(image_cost={"1024x1024:hd": 0.08})}
+    cache._currencies["openai"] = "USD"
+
+    found = cache.find_image_cost("dall-e-3", "1024x1024", "hd", count=1)
+    assert found is not None
+    prefix, currency, cost = found
+    assert prefix == "openai"
+    assert currency == "USD"
+    assert cost.total == pytest.approx(0.08)
+
+
+def test_find_image_cost_no_match_returns_none():
+    cache = PricingCache([])
+    cache._cache["openai"] = {"dall-e-3": PricingInfo(image_cost={"1024x1024:hd": 0.08})}
+
+    assert cache.find_image_cost("unknown-model", "1024x1024", "hd", count=1) is None
+
+
+# ---------------------------------------------------------------------------
+# PricingCache.get_character_cost / find_character_cost
+# ---------------------------------------------------------------------------
+
+def test_get_character_cost():
+    cache = PricingCache([])
+    cache._cache["openai"] = {"tts-1": PricingInfo(cost_per_character=0.000015)}
+    cache._currencies["openai"] = "USD"
+
+    cost = cache.get_character_cost("openai", "tts-1", num_characters=1000)
+    assert cost.total == pytest.approx(0.015)
+    assert cost.input == 0.0
+
+
+def test_get_character_cost_model_without_tts_pricing_returns_none():
+    cache = PricingCache([])
+    cache._cache["openai"] = {"gpt-4o": PricingInfo(input_cost_per_token=0.001, output_cost_per_token=0.002)}
+
+    assert cache.get_character_cost("openai", "gpt-4o", num_characters=1000) is None
+
+
+def test_find_character_cost_searches_all_providers():
+    cache = PricingCache([])
+    cache._cache["other"] = {"llama3": PricingInfo(input_cost_per_token=0.1, output_cost_per_token=0.2)}
+    cache._cache["openai"] = {"tts-1": PricingInfo(cost_per_character=0.000015)}
+    cache._currencies["openai"] = "USD"
+
+    found = cache.find_character_cost("tts-1", num_characters=100)
+    assert found is not None
+    prefix, currency, cost = found
+    assert prefix == "openai"
+    assert cost.total == pytest.approx(0.0015)
+
+
+def test_find_character_cost_no_match_returns_none():
+    cache = PricingCache([])
+    cache._cache["openai"] = {"tts-1": PricingInfo(cost_per_character=0.000015)}
+
+    assert cache.find_character_cost("unknown-model", num_characters=100) is None
+
+
+# ---------------------------------------------------------------------------
+# PricingCache.from_json – image_cost / cost_per_character parsing
+# ---------------------------------------------------------------------------
+
+def test_from_json_parses_image_and_character_pricing(tmp_path):
+    config_path = tmp_path / "openai_pricing.json"
+    config_path.write_text(
+        """
+        {
+          "prefix": "openai",
+          "currency": "USD",
+          "pricing": {
+            "dall-e-3": {"image_cost": {"1024x1024:hd": 0.08, "1024x1024:standard": 0.04}},
+            "tts-1": {"cost_per_character": 0.000015},
+            "gpt-4o": {"input_cost_per_token": 0.0025, "output_cost_per_token": 0.01}
+          }
+        }
+        """
+    )
+    cache = PricingCache.from_json(str(config_path))
+
+    dalle = cache._cache["openai"]["dall-e-3"]
+    assert dalle.image_cost == {"1024x1024:hd": 0.08, "1024x1024:standard": 0.04}
+
+    tts = cache._cache["openai"]["tts-1"]
+    assert tts.cost_per_character == 0.000015
+
+    gpt = cache._cache["openai"]["gpt-4o"]
+    assert gpt.input_cost_per_token == 0.0025
+    assert gpt.image_cost is None
+    assert gpt.cost_per_character is None
+
+
+# ---------------------------------------------------------------------------
 # PricingCache._refresh – static fallback
 # ---------------------------------------------------------------------------
 

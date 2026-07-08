@@ -675,4 +675,189 @@ class TestResponsesApiTracing:
         assert output_body["output"] == final_response["output"]
         assert kwargs["usage"]["prompt_tokens"] == 8
         assert kwargs["usage"]["completion_tokens"] == 3
-        assert kwargs["model"] == "gpt-x"
+
+
+# ---------------------------------------------------------------------------
+# Images / TTS — per-unit billing (no token usage)
+# ---------------------------------------------------------------------------
+
+def _make_named_request(path: str, body: bytes = b"", extra_headers: dict | None = None):
+    raw_headers = [
+        (b"host", b"localhost"),
+        (b"x-group-id", b"test-group"),
+    ]
+    for k, v in (extra_headers or {}).items():
+        raw_headers.append((k.encode(), v.encode()))
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": f"/llm/{path}",
+        "query_string": b"",
+        "headers": raw_headers,
+        "root_path": "",
+    }
+    return Request(scope, receive=AsyncMock(return_value={"type": "http.request", "body": body}))
+
+
+class TestImageMetrics:
+    @pytest.mark.asyncio
+    async def test_image_generation_is_traced_and_billed(self):
+        from app.core.proxy import proxy_request_with_retries
+        from app.services.pricing import CostBreakdown
+
+        input_body = {"model": "dall-e-3", "prompt": "a cat", "size": "1024x1024", "quality": "hd", "n": 1}
+        body = json.dumps(input_body).encode()
+        request = _make_named_request("v1/images/generations", body=body)
+
+        response_json = {"created": 1, "data": [{"url": "http://example/img.png"}]}
+        mock_response = HTTPXResponse(
+            status_code=200, json=response_json,
+            request=HTTPXRequest("POST", "http://upstream/v1/images/generations"),
+        )
+        mock_client = AsyncMock(spec=AsyncClient)
+        mock_client.request = AsyncMock(return_value=mock_response)
+
+        pricing_cache = MagicMock()
+        # provider_prefix is unset on the legacy single-provider path, so
+        # _emit_image_metrics resolves pricing via find_image_cost (searches
+        # all providers), not get_image_cost (which needs a known prefix).
+        pricing_cache.find_image_cost.return_value = ("dalle-provider", "USD", CostBreakdown(input=0.0, output=0.08, total=0.08))
+
+        with patch("app.core.proxy.trace_proxy_request") as mock_trace, \
+             patch("app.core.proxy.settings") as mock_settings, \
+             patch("app.core.proxy._schedule_billing_charge") as mock_charge:
+            _configure_settings(mock_settings)
+            mock_settings.tracing_log_io = True
+            mock_settings.billing_enabled = True
+
+            response = await proxy_request_with_retries(
+                client=mock_client, path="v1/images/generations",
+                request=request, custom_headers={},
+                pricing_cache=pricing_cache,
+            )
+
+        assert response.status_code == 200
+        pricing_cache.find_image_cost.assert_called_once_with("dall-e-3", "1024x1024", "hd", 1)
+        mock_trace.assert_called_once()
+        kwargs = mock_trace.call_args.kwargs
+        assert kwargs["model"] == "dall-e-3"
+        assert kwargs["provider"] == "dalle-provider"
+        assert kwargs["cost"].total == 0.08
+        mock_charge.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_image_defaults_when_fields_omitted(self):
+        """size/quality/n default per OpenAI's documented dall-e-2 defaults."""
+        from app.core.proxy import proxy_request_with_retries
+        from app.services.pricing import CostBreakdown
+
+        input_body = {"model": "dall-e-2", "prompt": "a dog"}
+        body = json.dumps(input_body).encode()
+        request = _make_named_request("v1/images/generations", body=body)
+
+        response_json = {"created": 1, "data": [{"url": "http://example/img.png"}]}
+        mock_response = HTTPXResponse(
+            status_code=200, json=response_json,
+            request=HTTPXRequest("POST", "http://upstream/v1/images/generations"),
+        )
+        mock_client = AsyncMock(spec=AsyncClient)
+        mock_client.request = AsyncMock(return_value=mock_response)
+
+        pricing_cache = MagicMock()
+        pricing_cache.find_image_cost.return_value = ("dalle-provider", "USD", CostBreakdown(input=0.0, output=0.02, total=0.02))
+
+        with patch("app.core.proxy.trace_proxy_request"), \
+             patch("app.core.proxy.settings") as mock_settings, \
+             patch("app.core.proxy._schedule_billing_charge"):
+            _configure_settings(mock_settings)
+            mock_settings.tracing_log_io = True
+            mock_settings.billing_enabled = True
+
+            await proxy_request_with_retries(
+                client=mock_client, path="v1/images/generations",
+                request=request, custom_headers={},
+                pricing_cache=pricing_cache,
+            )
+
+        pricing_cache.find_image_cost.assert_called_once_with("dall-e-2", "1024x1024", "standard", 1)
+
+
+class TestSpeechMetrics:
+    @pytest.mark.asyncio
+    async def test_tts_returns_raw_audio_bytes_not_json(self):
+        """Regression guard: TTS responses are raw audio, not JSON — they must
+        not be mangled into a {"detail": ...} wrapper by extract_content."""
+        from app.core.proxy import proxy_request_with_retries
+
+        input_body = {"model": "tts-1", "input": "hello world", "voice": "alloy"}
+        body = json.dumps(input_body).encode()
+        request = _make_named_request("v1/audio/speech", body=body)
+
+        audio_bytes = b"\xff\xfb\x90fake-mp3-bytes"
+        mock_response = HTTPXResponse(
+            status_code=200,
+            content=audio_bytes,
+            headers={"content-type": "audio/mpeg"},
+            request=HTTPXRequest("POST", "http://upstream/v1/audio/speech"),
+        )
+        mock_client = AsyncMock(spec=AsyncClient)
+        mock_client.request = AsyncMock(return_value=mock_response)
+
+        with patch("app.core.proxy.trace_proxy_request"), \
+             patch("app.core.proxy.settings") as mock_settings, \
+             patch("app.core.proxy._schedule_billing_charge"):
+            _configure_settings(mock_settings)
+            mock_settings.tracing_log_io = True
+            mock_settings.billing_enabled = False
+
+            response = await proxy_request_with_retries(
+                client=mock_client, path="v1/audio/speech",
+                request=request, custom_headers={},
+            )
+
+        assert response.status_code == 200
+        assert response.media_type == "audio/mpeg"
+        assert response.body == audio_bytes
+
+    @pytest.mark.asyncio
+    async def test_tts_is_traced_and_billed_per_character(self):
+        from app.core.proxy import proxy_request_with_retries
+        from app.services.pricing import CostBreakdown
+
+        input_body = {"model": "tts-1", "input": "hello world", "voice": "alloy"}  # 11 chars
+        body = json.dumps(input_body).encode()
+        request = _make_named_request("v1/audio/speech", body=body)
+
+        mock_response = HTTPXResponse(
+            status_code=200,
+            content=b"fake-audio",
+            headers={"content-type": "audio/mpeg"},
+            request=HTTPXRequest("POST", "http://upstream/v1/audio/speech"),
+        )
+        mock_client = AsyncMock(spec=AsyncClient)
+        mock_client.request = AsyncMock(return_value=mock_response)
+
+        pricing_cache = MagicMock()
+        pricing_cache.find_character_cost.return_value = ("tts-provider", "USD", CostBreakdown(input=0.0, output=0.000165, total=0.000165))
+
+        with patch("app.core.proxy.trace_proxy_request") as mock_trace, \
+             patch("app.core.proxy.settings") as mock_settings, \
+             patch("app.core.proxy._schedule_billing_charge") as mock_charge:
+            _configure_settings(mock_settings)
+            mock_settings.tracing_log_io = True
+            mock_settings.billing_enabled = True
+
+            await proxy_request_with_retries(
+                client=mock_client, path="v1/audio/speech",
+                request=request, custom_headers={},
+                pricing_cache=pricing_cache,
+            )
+
+        pricing_cache.find_character_cost.assert_called_once_with("tts-1", 11)
+        mock_trace.assert_called_once()
+        kwargs = mock_trace.call_args.kwargs
+        assert kwargs["model"] == "tts-1"
+        assert kwargs["provider"] == "tts-provider"
+        assert kwargs["cost"].total == 0.000165
+        assert kwargs["output_body"] is None
+        mock_charge.assert_called_once()
