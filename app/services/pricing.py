@@ -177,6 +177,100 @@ class PricingCache:
             pricing, prompt_tokens, completion_tokens
         )
 
+    def _find_unit_cost(
+        self,
+        model_name: str,
+        price: Callable[[str], CostBreakdown | None],
+    ) -> tuple[str, str, CostBreakdown] | None:
+        """Provider routing for non-token costs, same rules as ``find_cost``:
+        the routed provider when ``resolve_prefix`` is set, else the
+        ``<prefix>/`` provider, else a unique (or identically priced) match."""
+        if self._resolve_prefix is not None:
+            prefix = self._resolve_prefix(model_name)
+            cost = price(prefix) if prefix else None
+            if cost is None:
+                return None
+            return prefix, self._currencies.get(prefix, "USD"), cost
+
+        head = model_name.split("/", 1)[0]
+        if "/" in model_name and head in self._cache:
+            candidates = [head]
+        else:
+            candidates = list(self._cache)
+
+        matches = [
+            (prefix, self._currencies.get(prefix, "USD"), cost)
+            for prefix in candidates
+            if (cost := price(prefix)) is not None
+        ]
+        if not matches:
+            return None
+        if len({(cur, c.total) for _, cur, c in matches}) > 1:
+            logger.warning(
+                "find_unit_cost: ambiguous pricing, not charging",
+                model=model_name,
+                providers=[prefix for prefix, _, _ in matches],
+            )
+            return None
+        return matches[0]
+
+    def get_image_cost(
+        self,
+        provider_prefix: str,
+        model_name: str,
+        size: str,
+        quality: str,
+        count: int = 1,
+    ) -> CostBreakdown | None:
+        """Per-image cost for image-generation models (e.g. dall-e-3). The whole
+        amount is booked as `output` — there's no prompt/completion split for a
+        generated image the way there is for tokens."""
+        pricing = self._lookup(provider_prefix, model_name)
+        if not pricing or not pricing.image_cost:
+            return None
+        per_image = pricing.image_cost.get(f"{size}:{quality}")
+        if per_image is None:
+            per_image = pricing.image_cost.get(size)
+        if per_image is None:
+            return None
+        total = per_image * count
+        return CostBreakdown(input=0.0, output=total, total=total)
+
+    def find_image_cost(
+        self,
+        model_name: str,
+        size: str,
+        quality: str,
+        count: int = 1,
+    ) -> tuple[str, str, CostBreakdown] | None:
+        return self._find_unit_cost(
+            model_name,
+            lambda prefix: self.get_image_cost(prefix, model_name, size, quality, count),
+        )
+
+    def get_character_cost(
+        self,
+        provider_prefix: str,
+        model_name: str,
+        num_characters: int,
+    ) -> CostBreakdown | None:
+        """Per-character cost for TTS models. Booked entirely as `output`."""
+        pricing = self._lookup(provider_prefix, model_name)
+        if not pricing or pricing.cost_per_character is None:
+            return None
+        total = pricing.cost_per_character * num_characters
+        return CostBreakdown(input=0.0, output=total, total=total)
+
+    def find_character_cost(
+        self,
+        model_name: str,
+        num_characters: int,
+    ) -> tuple[str, str, CostBreakdown] | None:
+        return self._find_unit_cost(
+            model_name,
+            lambda prefix: self.get_character_cost(prefix, model_name, num_characters),
+        )
+
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
