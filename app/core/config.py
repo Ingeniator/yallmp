@@ -49,6 +49,13 @@ class AppSettings(BaseSettings):
     tracing_environment: str | None = None  # e.g. "production", "staging"
     tracing_release: str | None = None      # e.g. git commit SHA or semver tag
 
+    # OpenTelemetry distributed tracing (separate from the business-level
+    # Langfuse tracing above) — exports spans for HTTP requests and outbound
+    # httpx calls to an OTLP collector, e.g. Tempo.
+    otel_enabled: bool = False
+    otel_service_name: str = "yallmp"
+    otel_exporter_endpoint: str = "http://tempo:4318"  # OTLP/HTTP receiver base URL
+
     # Logging
     log_level: str = "INFO"
     log_file: str | None = None

@@ -113,6 +113,9 @@ async def lifespan(app: FastAPI):
     from app.services.tracing import shutdown as tracing_shutdown
     tracing_shutdown()
 
+    from app.core.otel import shutdown_otel
+    shutdown_otel()
+
     if llm_hub:
         await llm_hub.shutdown()
     if app.state.client:
@@ -122,6 +125,9 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     app = FastAPI(title=settings.app_name, debug=settings.debug, root_path=settings.root_path, lifespan=lifespan)
+
+    from app.core.otel import setup_otel
+    setup_otel(app)
 
     app.add_middleware(
         CORSMiddleware,
