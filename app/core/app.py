@@ -124,6 +124,10 @@ async def lifespan(app: FastAPI):
 
     tracing_shutdown()
 
+    from app.core.otel import shutdown_otel
+
+    shutdown_otel()
+
     await llm_hub.shutdown()
     logger.info("Application shutdown...")
 
@@ -136,6 +140,9 @@ def create_app() -> FastAPI:
         root_path=settings.root_path,
         lifespan=lifespan,
     )
+
+    from app.core.otel import setup_otel
+    setup_otel(app)
 
     app.add_middleware(
         CORSMiddleware,
