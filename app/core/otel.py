@@ -24,26 +24,37 @@ _configured = False
 
 
 def setup_otel(app) -> None:
-    """Configure the tracer provider and instrument app + httpx. No-op if disabled."""
-    global _configured
-    if not settings.otel_enabled or _configured:
+    """Configure the tracer provider and instrument app + httpx. No-op if disabled.
+
+    entrypoint.py calls uvicorn.run("entrypoint:app", ...) — a string target
+    makes uvicorn re-import the entrypoint module under a second module
+    identity, which re-runs create_app() a second time. The SDK-level setup
+    (provider/exporter/httpx patch) must only happen once, but
+    FastAPIInstrumentor.instrument_app() has to run for every app instance
+    created — otherwise whichever instance uvicorn actually ends up serving
+    may be the one that never got instrumented. instrument_app() is
+    idempotent per app object, so calling it unconditionally is safe.
+    """
+    if not settings.otel_enabled:
         return
 
-    resource = Resource.create({"service.name": settings.otel_service_name})
-    provider = TracerProvider(resource=resource)
-    exporter = OTLPSpanExporter(endpoint=f"{settings.otel_exporter_endpoint.rstrip('/')}/v1/traces")
-    provider.add_span_processor(BatchSpanProcessor(exporter))
-    trace.set_tracer_provider(provider)
+    global _configured
+    if not _configured:
+        resource = Resource.create({"service.name": settings.otel_service_name})
+        provider = TracerProvider(resource=resource)
+        exporter = OTLPSpanExporter(endpoint=f"{settings.otel_exporter_endpoint.rstrip('/')}/v1/traces")
+        provider.add_span_processor(BatchSpanProcessor(exporter))
+        trace.set_tracer_provider(provider)
+        HTTPXClientInstrumentor().instrument()
+
+        logger.info(
+            "OpenTelemetry tracing enabled",
+            endpoint=settings.otel_exporter_endpoint,
+            service_name=settings.otel_service_name,
+        )
+        _configured = True
 
     FastAPIInstrumentor.instrument_app(app)
-    HTTPXClientInstrumentor().instrument()
-
-    logger.info(
-        "OpenTelemetry tracing enabled",
-        endpoint=settings.otel_exporter_endpoint,
-        service_name=settings.otel_service_name,
-    )
-    _configured = True
 
 
 def shutdown_otel() -> None:
