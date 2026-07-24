@@ -9,7 +9,7 @@ from app.services.search_adapters.base import SearchAdapter
 class TavilyAdapter(SearchAdapter):
     """Adapter for the Tavily Search API (https://docs.tavily.com/docs/rest-api).
 
-    Auth: API key sent as ``X-Tvly-Api-Key`` header.
+    Auth: API key sent as ``Authorization`` header.
     Endpoint: POST {base_url}/search
     """
 

@@ -2,6 +2,7 @@
 
 All HTTP calls are mocked — no real network traffic.
 """
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
@@ -11,10 +12,10 @@ from app.services.search_adapters.exa import ExaAdapter
 from app.services.search_adapters.brave import BraveAdapter
 from app.services.search_adapters import get_adapter
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _mock_response(json_data: dict, status_code: int = 200):
     """Return an AsyncMock httpx.Response-like object."""
@@ -64,7 +65,9 @@ async def test_tavily_basic_search():
     client = _mock_client(_mock_response(TAVILY_RESPONSE))
     req = SearchRequest(query="python asyncio", num_results=5)
 
-    result = await adapter.search(client, {"X-Tvly-Api-Key": "key"}, req, "tavily")
+    result = await adapter.search(
+        client, {"Authorization": "Bearer key"}, req, "tavily"
+    )
 
     assert isinstance(result, SearchResponse)
     assert result.provider == "tavily"
@@ -288,6 +291,7 @@ async def test_brave_empty_web_results():
 # ---------------------------------------------------------------------------
 # get_adapter factory
 # ---------------------------------------------------------------------------
+
 
 def test_get_adapter_tavily():
     a = get_adapter("tavily")
