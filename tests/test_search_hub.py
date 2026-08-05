@@ -198,7 +198,7 @@ async def test_get_auth_headers_tavily():
     )
     p = SearchProvider(config)
     headers = await p.get_auth_headers()
-    assert headers == {"Authorization": "Bearer tv-key"}
+    assert headers == {"X-API-KEY": "tv-key"}
 
 
 @pytest.mark.asyncio
@@ -211,7 +211,7 @@ async def test_get_auth_headers_exa():
     )
     p = SearchProvider(config)
     headers = await p.get_auth_headers()
-    assert headers == {"x-api-key": "exa-key"}
+    assert headers == {"X-API-KEY": "exa-key"}
 
 
 @pytest.mark.asyncio

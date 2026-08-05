@@ -1,10 +1,10 @@
 {
   "name": "exa",
   "type": "exa",
-  "base_url": "https://api.exa.ai",
+  "base_url": "${GIGASEARCH_API_URL}",
   "auth": {
     "type": "APIKEY",
-    "api_key": "${EXA_API_KEY}"
+    "api_key": "${GIGASEARCH_API_KEY}"
   },
   "default": true,
   "cost_per_search": 0.001,

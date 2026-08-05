@@ -56,10 +56,6 @@ class SearchProvider:
         auth = self.config.auth
         if auth.type == AuthType.APIKEY and auth.api_key:
             provider_type = self.config.type
-            if provider_type == "tavily":
-                return {"Authorization": f"Bearer {auth.api_key}"}
-            if provider_type == "exa":
-                return {"x-api-key": auth.api_key}
             if provider_type == "brave":
                 return {"X-Subscription-Token": auth.api_key}
             # Generic fallback
