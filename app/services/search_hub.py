@@ -46,6 +46,7 @@ class SearchProvider:
                 max_connections=settings.max_connections,
                 max_keepalive_connections=settings.max_keepalive_connections,
             ),
+            verify=False,
         )
 
     async def shutdown(self) -> None:
