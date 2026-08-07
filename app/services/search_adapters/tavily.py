@@ -32,7 +32,7 @@ class TavilyAdapter(SearchAdapter):
             payload["exclude_domains"] = req.exclude_domains
 
         response = await client.post(
-            "/search",
+            "/tavily/search",
             json=payload,
             headers=auth_headers,
         )
