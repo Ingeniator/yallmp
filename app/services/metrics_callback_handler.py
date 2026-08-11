@@ -125,6 +125,9 @@ class MetricsCallbackHandler(BaseCallbackHandler):
 
         # Cost tracking — use request model name for pricing lookup (matches pricing cache)
         pricing_model = self.request_model or model_name
+        logger.info(
+            f"{self.request_model} {model_name} {self.currency} {self.provider_prefix}"
+        )
         if self.provider_prefix is not None and self.pricing_cache and self.currency:
             cost = self.pricing_cache.get_cost(
                 self.provider_prefix,
