@@ -143,6 +143,9 @@ class MetricsCallbackHandler(BaseCallbackHandler):
                     model=model_name,
                     group_id=group_id,
                 )
+
+                logger.info(f"{self.provider_prefix} {model_name} {cost.total}")
+
                 llm_cost.labels(**cost_labels).inc(cost.total)
                 llm_input_cost.labels(**cost_labels).inc(cost.input)
                 llm_output_cost.labels(**cost_labels).inc(cost.output)
