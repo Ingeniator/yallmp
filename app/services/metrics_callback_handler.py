@@ -75,6 +75,7 @@ class MetricsCallbackHandler(BaseCallbackHandler):
         self.request_model = request_model
 
     def on_llm_end(self, response, **kwargs):
+        logger.info("on_llm_end method start")
         group_id = self.metadata.group_id if self.metadata else "unknown"
         chain_name = self.metadata.chain_name if self.metadata else "unknown"
         chain_type = (
@@ -145,3 +146,5 @@ class MetricsCallbackHandler(BaseCallbackHandler):
                 llm_cost.labels(**cost_labels).inc(cost.total)
                 llm_input_cost.labels(**cost_labels).inc(cost.input)
                 llm_output_cost.labels(**cost_labels).inc(cost.output)
+
+        logger.info("on_llm_end method end")
