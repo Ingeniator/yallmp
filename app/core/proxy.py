@@ -1,7 +1,15 @@
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
-from httpx import AsyncClient, ConnectError, RequestError, Timeout, Limits, Response as HTTPXResponse, AsyncByteStream
+from httpx import (
+    AsyncClient,
+    ConnectError,
+    RequestError,
+    Timeout,
+    Limits,
+    Response as HTTPXResponse,
+    AsyncByteStream,
+)
 import random
 import time
 import asyncio
@@ -46,15 +54,27 @@ class CircuitBreaker:
 
     @property
     def failure_threshold(self) -> int:
-        return self._failure_threshold if self._failure_threshold is not None else settings.proxy_failure_threshold
+        return (
+            self._failure_threshold
+            if self._failure_threshold is not None
+            else settings.proxy_failure_threshold
+        )
 
     @property
     def recovery_time(self) -> int:
-        return self._recovery_time if self._recovery_time is not None else settings.proxy_recovery_time
+        return (
+            self._recovery_time
+            if self._recovery_time is not None
+            else settings.proxy_recovery_time
+        )
 
     @property
     def window_size(self) -> int:
-        return self._window_size if self._window_size is not None else settings.proxy_window_size
+        return (
+            self._window_size
+            if self._window_size is not None
+            else settings.proxy_window_size
+        )
 
     async def get_status(self) -> dict:
         async with self._lock:
@@ -102,12 +122,17 @@ async def create_async_client():
         cert = (settings.proxy_api_cert_path, settings.proxy_api_cert_key_path)
     return AsyncClient(
         cert=cert,
-        timeout=Timeout(connect=settings.proxy_connect_timeout, read=settings.proxy_read_timeout, write=settings.proxy_write_timeout, pool=settings.proxy_pool_timeout),
+        timeout=Timeout(
+            connect=settings.proxy_connect_timeout,
+            read=settings.proxy_read_timeout,
+            write=settings.proxy_write_timeout,
+            pool=settings.proxy_pool_timeout,
+        ),
         limits=Limits(
             max_connections=settings.max_connections,
-            max_keepalive_connections=settings.max_keepalive_connections
+            max_keepalive_connections=settings.max_keepalive_connections,
         ),
-        verify=settings.proxy_verify_ssl
+        verify=settings.proxy_verify_ssl,
     )
 
 
@@ -126,15 +151,21 @@ async def exponential_backoff_retry(
 ) -> JSONResponse | HTTPXResponse:
     """Performs a request with exponential backoff on retryable errors."""
     _cb = cb or circuit_breaker
-    _max_retries = max_retries if max_retries is not None else settings.proxy_max_retries
+    _max_retries = (
+        max_retries if max_retries is not None else settings.proxy_max_retries
+    )
     _base_delay = base_delay if base_delay is not None else settings.proxy_base_delay
-    _backoff_factor = backoff_factor if backoff_factor is not None else settings.proxy_backoff_factor
+    _backoff_factor = (
+        backoff_factor if backoff_factor is not None else settings.proxy_backoff_factor
+    )
 
     last_response_status_code = 523
     error_response = ""
 
     if await _cb.check_open():
-        return JSONResponse(content={"error": "Circuit breaker open. Try later."}, status_code=503)
+        return JSONResponse(
+            content={"error": "Circuit breaker open. Try later."}, status_code=503
+        )
 
     attempts = 1 + _max_retries
     for attempt in range(attempts):
@@ -145,7 +176,12 @@ async def exponential_backoff_retry(
             # Handle 429 (Too Many Requests) with Retry-After
             if response.status_code == 429:
                 retry_after = response.headers.get("Retry-After")
-                delay = int(retry_after) if retry_after else _base_delay * (_backoff_factor ** attempt) + random.uniform(0, 0.1)
+                delay = (
+                    int(retry_after)
+                    if retry_after
+                    else _base_delay * (_backoff_factor**attempt)
+                    + random.uniform(0, 0.1)
+                )
                 logger.warning(f"Rate limited. Retrying in {delay:.2f} seconds.")
                 await asyncio.sleep(delay)
                 continue
@@ -161,8 +197,8 @@ async def exponential_backoff_retry(
                     "details": {
                         "exception": str(e),
                         "exception_type": type(e).__name__,
-                        "attempt": attempt + 1
-                    }
+                        "attempt": attempt + 1,
+                    },
                 }
             }
             logger.warning("Connection failed", details=error_response)
@@ -173,19 +209,25 @@ async def exponential_backoff_retry(
                     "details": {
                         "exception": str(e),
                         "exception_type": type(e).__name__,
-                        "attempt": attempt + 1
-                    }
+                        "attempt": attempt + 1,
+                    },
                 }
             }
             logger.warning("Request failed", details=error_response)
 
         activated = await _cb.record_failure()
         if activated:
-            logger.error("Circuit breaker activated due to multiple failures.", details=error_response)
-            return JSONResponse(content={"error": "Circuit breaker activated. Try later."}, status_code=503)
+            logger.error(
+                "Circuit breaker activated due to multiple failures.",
+                details=error_response,
+            )
+            return JSONResponse(
+                content={"error": "Circuit breaker activated. Try later."},
+                status_code=503,
+            )
 
         # Exponential backoff delay
-        delay = _base_delay * (_backoff_factor ** attempt) + random.uniform(0, 0.1)
+        delay = _base_delay * (_backoff_factor**attempt) + random.uniform(0, 0.1)
         logger.debug(f"Retrying request in {delay:.2f} seconds.")
         await asyncio.sleep(delay)
 
@@ -202,18 +244,21 @@ class RequestStreamWrapper(AsyncByteStream):
             yield chunk
 
 
-async def stream_multipart_post(request: Request, client: AsyncClient, target_url: str, headers: dict) -> JSONResponse:
+async def stream_multipart_post(
+    request: Request, client: AsyncClient, target_url: str, headers: dict
+) -> JSONResponse:
     forwarded_headers = {
         key: value
         for key, value in headers.items()
-        if key.lower() not in ("content-length", "transfer-encoding", "connection", "expect", "host")
+        if key.lower()
+        not in ("content-length", "transfer-encoding", "connection", "expect", "host")
     }
 
     async with client.stream(
-            method="POST",
-            url=target_url,
-            headers=forwarded_headers,
-            content=RequestStreamWrapper(request),
+        method="POST",
+        url=target_url,
+        headers=forwarded_headers,
+        content=RequestStreamWrapper(request),
     ) as response:
         body = await response.aread()
         try:
@@ -266,7 +311,12 @@ def _parse_model_version(model_string: str) -> dict | None:
     return {"version": f"{name}:{version}"}
 
 
-async def get_model_version(model_name: str, client: AsyncClient, request: Request, custom_headers: dict[str, str] | None = None):
+async def get_model_version(
+    model_name: str,
+    client: AsyncClient,
+    request: Request,
+    custom_headers: dict[str, str] | None = None,
+):
     custom_headers = custom_headers or {}
     path = "v1/chat/completions"
     target_url = f"{settings.proxy_target_url}/{path}"
@@ -274,13 +324,16 @@ async def get_model_version(model_name: str, client: AsyncClient, request: Reque
         "model": model_name,
         "messages": [{"role": "user", "content": "Reply with any single digit"}],
         "stream": False,
-        "update_interval": 0
+        "update_interval": 0,
     }
     try:
         response = await exponential_backoff_retry(
             client.request, "POST", target_url, headers=custom_headers, json=body
         )
-        if isinstance(response, HTTPXResponse) and response.status_code in _SUCCESS_STATUS_CODES:
+        if (
+            isinstance(response, HTTPXResponse)
+            and response.status_code in _SUCCESS_STATUS_CODES
+        ):
             current_model = response.json().get("model")
             if current_model:
                 result = _parse_model_version(current_model)
@@ -289,46 +342,59 @@ async def get_model_version(model_name: str, client: AsyncClient, request: Reque
                 logger.warning(f"Unexpected model format: {current_model}")
         else:
             response_dict = extract_content(response)
-            logger.error("Proxy error details", details={
-                "status_code": response.status_code,
-                "target_url": target_url,
-                "response": response_dict,
-            })
+            logger.error(
+                "Proxy error details",
+                details={
+                    "status_code": response.status_code,
+                    "target_url": target_url,
+                    "response": response_dict,
+                },
+            )
             error_response = {
                 "error": {
                     "status_code": response.status_code,
                     "message": response_dict.get("message", "Proxy request failed"),
-                    "details": {
-                        "response": response_dict
-                    }
+                    "details": {"response": response_dict},
                 }
             }
-            return JSONResponse(content=error_response, status_code=response.status_code)
+            return JSONResponse(
+                content=error_response, status_code=response.status_code
+            )
 
     except Exception as e:
-        logger.error("get_model_version exception", details={
-            "target_url": target_url,
-            "exception": str(e),
-            "exception_type": type(e).__name__
-        })
-        return JSONResponse(content={
-            "error": {
-                "status_code": 500,
-                "message": "get_model_version request failed",
-            }
-        }, status_code=500)
+        logger.error(
+            "get_model_version exception",
+            details={
+                "target_url": target_url,
+                "exception": str(e),
+                "exception_type": type(e).__name__,
+            },
+        )
+        return JSONResponse(
+            content={
+                "error": {
+                    "status_code": 500,
+                    "message": "get_model_version request failed",
+                }
+            },
+            status_code=500,
+        )
 
 
 # ---------------------------------------------------------------------------
 # Shared proxy helpers (used by both legacy and multi-provider paths)
 # ---------------------------------------------------------------------------
 
-def _prepare_proxy_headers(request: Request, auth_headers: dict[str, str]) -> dict[str, str]:
+
+def _prepare_proxy_headers(
+    request: Request, auth_headers: dict[str, str]
+) -> dict[str, str]:
     """Build forwarded headers: filter excluded patterns, apply auth, force identity encoding."""
     headers = dict(request.headers)
     logger.debug(f"original headers {redact_headers(headers)}")
     headers = {
-        k: v for k, v in headers.items()
+        k: v
+        for k, v in headers.items()
         if not any(fnmatch.fnmatch(k.lower(), p) for p in _EXCLUDE_HEADER_PATTERNS)
     }
     logger.debug(f"cleaned headers {redact_headers(headers)}")
@@ -369,7 +435,10 @@ _CLI_AGENT_USER_AGENT_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"\blangchain\b", re.I), "langchain"),
     (re.compile(r"llama[_-]?index", re.I), "llamaindex"),
     (re.compile(r"openai-python|OpenAI/Python", re.I), "openai-sdk"),
-    (re.compile(r"anthropic-sdk|Anthropic/(?:Python|TypeScript|JS)", re.I), "anthropic-sdk"),
+    (
+        re.compile(r"anthropic-sdk|Anthropic/(?:Python|TypeScript|JS)", re.I),
+        "anthropic-sdk",
+    ),
 ]
 
 
@@ -471,7 +540,11 @@ def _unwrap_responses_event(payload: dict) -> tuple[dict, bool]:
     """
     event_type = payload.get("type")
     response = payload.get("response")
-    if isinstance(event_type, str) and event_type.startswith("response.") and isinstance(response, dict):
+    if (
+        isinstance(event_type, str)
+        and event_type.startswith("response.")
+        and isinstance(response, dict)
+    ):
         return response, True
     return payload, False
 
@@ -484,7 +557,7 @@ def _extract_streaming_tool_calls(full_text: str) -> list[str]:
         if not stripped.startswith("data:") or stripped == "data: [DONE]":
             continue
         try:
-            payload = json.loads(stripped[len("data:"):].strip())
+            payload = json.loads(stripped[len("data:") :].strip())
         except (json.JSONDecodeError, ValueError):
             continue
         for choice in payload.get("choices", []):
@@ -511,7 +584,10 @@ def _emit_completions_metrics(
         return
 
     if response_data.get("usage"):
-        response_data = {**response_data, "usage": _normalize_usage(response_data["usage"])}
+        response_data = {
+            **response_data,
+            "usage": _normalize_usage(response_data["usage"]),
+        }
 
     metadata = ChainMetadataForTracking(
         chain_type=ChainType.prompt,
@@ -586,7 +662,15 @@ def _emit_completions_metrics(
         billing_limits = getattr(request.app.state, "billing_limits", {})
         if billing_redis:
             from app.services.billing import charge
-            asyncio.create_task(charge(billing_redis, billing_limits, request.headers.get("x-group-id", "unknown"), cost.total))
+
+            asyncio.create_task(
+                charge(
+                    billing_redis,
+                    billing_limits,
+                    request.headers.get("x-group-id", "unknown"),
+                    cost.total,
+                )
+            )
 
 
 def _make_error_response(response, provider_label: str | None = None) -> JSONResponse:
@@ -628,6 +712,9 @@ async def _do_proxy_request(
     backoff_factor: float | None = None,
 ) -> JSONResponse | StreamingResponse:
     """Core proxy logic shared by legacy single-provider and multi-provider paths."""
+    logger.info("_do_proxy_request")
+    logger.info(f"{provider_prefix} {provider_currency}")
+
     is_streaming = _detect_streaming(method, body)
 
     if is_streaming:
@@ -656,14 +743,25 @@ async def _do_proxy_request(
         backoff_factor=backoff_factor,
     )
 
-    if isinstance(response, HTTPXResponse) and response.status_code in _SUCCESS_STATUS_CODES:
-        logger.debug(f"Proxy request successful: {method} {target_url} -> {response.status_code}")
+    if (
+        isinstance(response, HTTPXResponse)
+        and response.status_code in _SUCCESS_STATUS_CODES
+    ):
+        logger.debug(
+            f"Proxy request successful: {method} {target_url} -> {response.status_code}"
+        )
 
         if _is_traceable_path(path):
             response_data = json.loads(response.text)
             _emit_completions_metrics(
-                response_data, request, start_time, body, path,
-                provider_prefix, provider_currency, pricing_cache,
+                response_data,
+                request,
+                start_time,
+                body,
+                path,
+                provider_prefix,
+                provider_currency,
+                pricing_cache,
             )
 
         return JSONResponse(
@@ -678,7 +776,15 @@ async def _do_proxy_request(
 # Public entry-points (kept for backward-compat with app.py and tests)
 # ---------------------------------------------------------------------------
 
-async def proxy_request_with_retries(client: AsyncClient, path: str, request: Request, custom_headers: dict[str, str] | None = None, pricing_cache=None, body: bytes | None = None):
+
+async def proxy_request_with_retries(
+    client: AsyncClient,
+    path: str,
+    request: Request,
+    custom_headers: dict[str, str] | None = None,
+    pricing_cache=None,
+    body: bytes | None = None,
+):
     custom_headers = custom_headers or {}
     target_url = f"{settings.proxy_target_url}/{path}"
     if request.url.query:
@@ -688,8 +794,12 @@ async def proxy_request_with_retries(client: AsyncClient, path: str, request: Re
 
     try:
         method = request.method
-        if method.lower() == "post" and headers.get("content-type", "").lower().startswith("multipart/form-data"):
-            return await stream_multipart_post(request, client, target_url, headers=headers)
+        if method.lower() == "post" and headers.get(
+            "content-type", ""
+        ).lower().startswith("multipart/form-data"):
+            return await stream_multipart_post(
+                request, client, target_url, headers=headers
+            )
 
         if body is None:
             body = await request.body()
@@ -706,23 +816,33 @@ async def proxy_request_with_retries(client: AsyncClient, path: str, request: Re
         )
 
     except Exception as e:
-        logger.error("Proxy exception", details={
-            "target_url": target_url,
-            "method": request.method,
-            "exception": str(e),
-            "exception_type": type(e).__name__
-        })
-        return JSONResponse(content={
-            "error": {
-                "status_code": 500,
-                "message": "Proxy request failed",
-            }
-        }, status_code=500)
+        logger.error(
+            "Proxy exception",
+            details={
+                "target_url": target_url,
+                "method": request.method,
+                "exception": str(e),
+                "exception_type": type(e).__name__,
+            },
+        )
+        return JSONResponse(
+            content={
+                "error": {
+                    "status_code": 500,
+                    "message": "Proxy request failed",
+                }
+            },
+            status_code=500,
+        )
 
 
 async def _handle_streaming_request(
-    client: AsyncClient, target_url: str, headers: dict,
-    body: bytes, path: str, request: Request,
+    client: AsyncClient,
+    target_url: str,
+    headers: dict,
+    body: bytes,
+    path: str,
+    request: Request,
     provider_prefix: str | None = None,
     provider_currency: str | None = None,
     pricing_cache=None,
@@ -735,13 +855,18 @@ async def _handle_streaming_request(
             stream=True,
         )
     except (ConnectError, RequestError) as e:
-        logger.error("Streaming connection failed", details={
-            "target_url": target_url,
-            "exception": str(e),
-            "exception_type": type(e).__name__,
-        })
+        logger.error(
+            "Streaming connection failed",
+            details={
+                "target_url": target_url,
+                "exception": str(e),
+                "exception_type": type(e).__name__,
+            },
+        )
         return JSONResponse(
-            content={"error": {"status_code": 502, "message": "Upstream connection failed"}},
+            content={
+                "error": {"status_code": 502, "message": "Upstream connection failed"}
+            },
             status_code=502,
         )
 
@@ -752,7 +877,9 @@ async def _handle_streaming_request(
             error_data = json.loads(body_bytes.decode("utf-8", errors="replace"))
         except Exception:
             error_data = {"detail": body_bytes.decode("utf-8", errors="replace")}
-        return JSONResponse(content=error_data, status_code=upstream_response.status_code)
+        return JSONResponse(
+            content=error_data, status_code=upstream_response.status_code
+        )
 
     async def _stream_generator():
         collected_chunks: list[str] = []
@@ -768,8 +895,13 @@ async def _handle_streaming_request(
             # Parse collected SSE data for metrics
             if _is_traceable_path(path):
                 _emit_streaming_metrics(
-                    collected_chunks, request, start_time, body,
-                    provider_prefix, provider_currency, pricing_cache,
+                    collected_chunks,
+                    request,
+                    start_time,
+                    body,
+                    provider_prefix,
+                    provider_currency,
+                    pricing_cache,
                     first_chunk_time=first_chunk_time,
                 )
 
@@ -797,7 +929,7 @@ def _assemble_streaming_output(full_text: str, last_payload: dict) -> dict:
         if not stripped.startswith("data:") or stripped == "data: [DONE]":
             continue
         try:
-            payload = json.loads(stripped[len("data:"):].strip())
+            payload = json.loads(stripped[len("data:") :].strip())
         except (json.JSONDecodeError, ValueError):
             continue
 
@@ -805,7 +937,11 @@ def _assemble_streaming_output(full_text: str, last_payload: dict) -> dict:
             idx = choice.get("index", 0)
             delta = choice.get("delta", {})
             if idx not in choices:
-                choices[idx] = {"role": "assistant", "content": "", "finish_reason": None}
+                choices[idx] = {
+                    "role": "assistant",
+                    "content": "",
+                    "finish_reason": None,
+                }
             if delta.get("role"):
                 choices[idx]["role"] = delta["role"]
             if delta.get("content"):
@@ -849,12 +985,17 @@ def _emit_streaming_metrics(
         for line in full_text.splitlines():
             stripped = line.strip()
             if stripped.startswith("data:") and stripped != "data: [DONE]":
-                last_data = stripped[len("data:"):].strip()
+                last_data = stripped[len("data:") :].strip()
 
         if last_data:
-            last_payload, is_responses_api = _unwrap_responses_event(json.loads(last_data))
+            last_payload, is_responses_api = _unwrap_responses_event(
+                json.loads(last_data)
+            )
             if last_payload.get("usage"):
-                last_payload = {**last_payload, "usage": _normalize_usage(last_payload["usage"])}
+                last_payload = {
+                    **last_payload,
+                    "usage": _normalize_usage(last_payload["usage"]),
+                }
 
             try:
                 input_body = json.loads(body) if body else None
@@ -900,16 +1041,20 @@ def _emit_streaming_metrics(
                 )
 
             from datetime import datetime, timezone
+
             completion_start_time = (
                 datetime.fromtimestamp(first_chunk_time, tz=timezone.utc)
-                if first_chunk_time else None
+                if first_chunk_time
+                else None
             )
             output_body = (
-                last_payload if is_responses_api
+                last_payload
+                if is_responses_api
                 else _assemble_streaming_output(full_text, last_payload)
             )
             tool_calls = (
-                _tool_calls_from_response(last_payload) if is_responses_api
+                _tool_calls_from_response(last_payload)
+                if is_responses_api
                 else _extract_streaming_tool_calls(full_text)
             )
             trace_proxy_request(
@@ -939,7 +1084,15 @@ def _emit_streaming_metrics(
                 billing_limits = getattr(request.app.state, "billing_limits", {})
                 if billing_redis:
                     from app.services.billing import charge
-                    asyncio.create_task(charge(billing_redis, billing_limits, request.headers.get("x-group-id", "unknown"), cost.total))
+
+                    asyncio.create_task(
+                        charge(
+                            billing_redis,
+                            billing_limits,
+                            request.headers.get("x-group-id", "unknown"),
+                            cost.total,
+                        )
+                    )
     except Exception as e:
         logger.error("Error processing streaming LLM usage metrics", exc_info=e)
 
@@ -966,6 +1119,10 @@ async def proxy_request_to_provider(
     pricing_cache=None,
 ):
     """Route a request to a specific LLM provider, stripping the model prefix."""
+    logger.info(
+        f"provider {str(provider.config.prefix)} {str(provider.config.currency)}"
+    )
+
     config = provider.config
     target_url = f"{config.base_url}/{path}"
     if request.url.query:
@@ -995,12 +1152,15 @@ async def proxy_request_to_provider(
         )
 
     except Exception as e:
-        logger.error("Provider proxy exception", details={
-            "provider": config.prefix,
-            "target_url": target_url,
-            "exception": str(e),
-            "exception_type": type(e).__name__,
-        })
+        logger.error(
+            "Provider proxy exception",
+            details={
+                "provider": config.prefix,
+                "target_url": target_url,
+                "exception": str(e),
+                "exception_type": type(e).__name__,
+            },
+        )
         return JSONResponse(
             content={"error": {"status_code": 500, "message": "Proxy request failed"}},
             status_code=500,
