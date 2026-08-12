@@ -596,6 +596,7 @@ def create_app() -> FastAPI:
             request: Request,
             custom_headers: dict[str, str] = Depends(add_authz_header),
         ):
+            logger.info("proxy request")
             llm_hub: LlmHub = app.state.llm_hub
 
             # Multi-provider routing for POST requests when hub is enabled

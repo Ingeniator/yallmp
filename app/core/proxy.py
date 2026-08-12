@@ -748,12 +748,12 @@ async def _do_proxy_request(
         base_delay=base_delay,
         backoff_factor=backoff_factor,
     )
-
+    logger.info("wtf?")
     if (
         isinstance(response, HTTPXResponse)
         and response.status_code in _SUCCESS_STATUS_CODES
     ):
-        logger.debug(
+        logger.info(
             f"Proxy request successful: {method} {target_url} -> {response.status_code}"
         )
 
