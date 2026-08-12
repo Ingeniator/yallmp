@@ -804,6 +804,7 @@ async def proxy_request_with_retries(
         if body is None:
             body = await request.body()
 
+        logger.info("This is right place!")
         return await _do_proxy_request(
             client=client,
             target_url=target_url,
