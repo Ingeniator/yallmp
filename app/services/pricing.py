@@ -15,12 +15,14 @@ logger = setup_logging()
 @dataclass
 class CostBreakdown:
     """Per-call cost split into input (prompt) and output (completion) components."""
+
     input: float
     output: float
     total: float
 
     def __bool__(self) -> bool:
         return self.total != 0
+
 
 _DEFAULT_TTL = 86400  # 24 hours
 
@@ -129,7 +131,9 @@ class PricingCache:
             return None
         input_cost = prompt_tokens * pricing.input_cost_per_token
         output_cost = completion_tokens * pricing.output_cost_per_token
-        return CostBreakdown(input=input_cost, output=output_cost, total=input_cost + output_cost)
+        return CostBreakdown(
+            input=input_cost, output=output_cost, total=input_cost + output_cost
+        )
 
     def find_cost(
         self,
@@ -165,7 +169,9 @@ class PricingCache:
             )
 
         # Provider-based mode (LLM Hub)
-        for provider in self._providers:
+        logger.info(f"providers {self._providers}")
+        for _, provider in self._providers.items():
+            logger.info(f"provider {provider}")
             config = provider.config
             prefix = config.prefix
 
@@ -173,7 +179,10 @@ class PricingCache:
             if config.pricing_endpoint:
                 url = f"{config.base_url}{config.pricing_endpoint}"
                 ok = await self._fetch_endpoint(
-                    url, prefix, config.currency or "USD", verify_ssl=config.verify_ssl,
+                    url,
+                    prefix,
+                    config.currency or "USD",
+                    verify_ssl=config.verify_ssl,
                 )
                 if ok:
                     continue
@@ -230,11 +239,19 @@ class PricingCache:
                 try:
                     if not isinstance(item, dict):
                         continue
-                    name = item.get("Public Name") or item.get("public_name") or item.get("name")
+                    name = (
+                        item.get("Public Name")
+                        or item.get("public_name")
+                        or item.get("name")
+                    )
                     if not name:
                         continue
-                    input_cost = float(item.get("Input Cost $", 0) or item.get("input_cost", 0))
-                    output_cost = float(item.get("Output Cost $", 0) or item.get("output_cost", 0))
+                    input_cost = float(
+                        item.get("Input Cost $", 0) or item.get("input_cost", 0)
+                    )
+                    output_cost = float(
+                        item.get("Output Cost $", 0) or item.get("output_cost", 0)
+                    )
                     result[name] = PricingInfo(
                         input_cost_per_token=input_cost / 1_000_000,
                         output_cost_per_token=output_cost / 1_000_000,

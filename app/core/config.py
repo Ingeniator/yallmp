@@ -27,7 +27,7 @@ class AppSettings(BaseSettings):
     proxy_enabled: bool = False
     prompt_hub_enabled: bool = False
     chain_hub_enabled: bool = False
-    llm_hub_enabled: bool = False
+    llm_hub_enabled: bool = True
     dashboard_enabled: bool = False
     dashboard_metrics_backend: str = "local"  # "local" or "prometheus"
     dashboard_prometheus_url: str = ""  # e.g. "http://prometheus:9090"
