@@ -584,6 +584,8 @@ def _emit_completions_metrics(
     if not _is_traceable_path(path):
         return
 
+    logger.info("emit metrics start")
+
     if response_data.get("usage"):
         response_data = {
             **response_data,
@@ -755,6 +757,7 @@ async def _do_proxy_request(
             f"Proxy request successful: {method} {target_url} -> {response.status_code}"
         )
 
+        logger.info(f"is traceable path {_is_traceable_path(path)}")
         if _is_traceable_path(path):
             response_data = json.loads(response.text)
             _emit_completions_metrics(
