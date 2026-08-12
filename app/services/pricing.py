@@ -163,6 +163,7 @@ class PricingCache:
         # Standalone endpoint mode (from_endpoint factory)
         endpoint_url = getattr(self, "_endpoint_url", None)
         if endpoint_url:
+            logger.info("refresh price cache")
             await self._fetch_endpoint(
                 endpoint_url,
                 self._endpoint_prefix,
@@ -207,6 +208,7 @@ class PricingCache:
         verify_ssl: bool = True,
     ) -> bool:
         """Fetch pricing from a remote URL. Returns True on success."""
+        logger.info("start fetching")
         try:
             async with httpx.AsyncClient(verify=verify_ssl, timeout=30) as client:
                 resp = await client.get(url)
