@@ -22,6 +22,7 @@ import fnmatch
 import re
 from typing import AsyncIterator
 from app.core.security import redact_headers
+from app.services.pricing import PricingCache
 from app.services.tracing import trace_proxy_request
 
 logger = setup_logging()
@@ -577,7 +578,7 @@ def _emit_completions_metrics(
     path: str,
     provider_prefix: str | None,
     currency: str | None,
-    pricing_cache,
+    pricing_cache: PricingCache,
 ) -> None:
     """Emit Prometheus metrics and tracing for a non-streaming completions/responses request."""
     if not _is_traceable_path(path):
@@ -603,13 +604,16 @@ def _emit_completions_metrics(
 
     # Resolve pricing if not already known
     pfx, cur = provider_prefix, currency
+    logger.info(f"606 {pfx} {cur}")
     if pfx is None and pricing_cache:
+        logger.info("pricing cache")
         usage = response_data.get("usage", {})
         found = pricing_cache.find_cost(
             request_model or response_data.get("model", ""),
             usage.get("prompt_tokens", 0),
             usage.get("completion_tokens", 0),
         )
+        logger.info(f"found {found}")
         if found:
             pfx, cur, _ = found
 
