@@ -722,7 +722,7 @@ async def _do_proxy_request(
     logger.info(f"{provider_prefix} {provider_currency}")
 
     is_streaming = _detect_streaming(method, body)
-
+    logger.info(f"is_streaming {is_streaming}")
     if is_streaming:
         return await _handle_streaming_request(
             client=client,
