@@ -170,7 +170,8 @@ class PricingCache:
 
         # Provider-based mode (LLM Hub)
         logger.info(f"providers {self._providers}")
-        for _, provider in self._providers.items():
+        # TODO when llm hub is enabled, self._providers is dict, not list
+        for provider in self._providers:
             logger.info(f"provider {provider}")
             config = provider.config
             prefix = config.prefix
