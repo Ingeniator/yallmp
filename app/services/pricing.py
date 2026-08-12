@@ -213,7 +213,9 @@ class PricingCache:
             async with httpx.AsyncClient(verify=verify_ssl, timeout=30) as client:
                 resp = await client.get(url)
             if resp.status_code == 200:
-                parsed = self._parse_pricing_response(resp.json())
+                response = resp.json()
+                logger.info(f"RESPONSE {response}")
+                parsed = self._parse_pricing_response(response)
                 if parsed:
                     self._cache[prefix] = parsed
                     self._currencies[prefix] = currency
@@ -224,7 +226,7 @@ class PricingCache:
                 else:
                     logger.error("Parsed price with error")
             else:
-                error = await resp.json()
+                error = resp.json()
                 logger.error(
                     f"Get price from {url}: status {resp.status_code}. Error - {error}"
                 )
