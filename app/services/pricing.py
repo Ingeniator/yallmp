@@ -219,6 +219,13 @@ class PricingCache:
                         f"Loaded dynamic pricing for '{prefix}' from {url}: {len(parsed)} models"
                     )
                     return True
+                else:
+                    logger.error("Parsed price with error")
+            else:
+                error = await resp.json()
+                logger.error(
+                    f"Get price from {url}: status {resp.status_code}. Error - {error}"
+                )
         except Exception as e:
             logger.warning(f"Failed to fetch pricing from {url} for '{prefix}': {e}")
         return False
