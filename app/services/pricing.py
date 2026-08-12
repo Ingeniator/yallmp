@@ -256,6 +256,7 @@ class PricingCache:
                         item.get("Public Name")
                         or item.get("public_name")
                         or item.get("name")
+                        or item.get("Model")
                     )
                     if not name:
                         continue
