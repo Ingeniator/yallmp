@@ -128,6 +128,7 @@ class MetricsCallbackHandler(BaseCallbackHandler):
         logger.info(
             f"{self.request_model} {model_name} {self.currency} {self.provider_prefix}"
         )
+        logger.info(f"Pricing cache {self.pricing_cache}")
         if self.provider_prefix is not None and self.pricing_cache and self.currency:
             cost = self.pricing_cache.get_cost(
                 self.provider_prefix,
