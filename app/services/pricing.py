@@ -30,7 +30,7 @@ _DEFAULT_TTL = 86400  # 24 hours
 class PricingCache:
     """Fetches and caches per-model pricing for LLM providers."""
 
-    def __init__(self, providers: list, ttl: int = _DEFAULT_TTL):
+    def __init__(self, providers: dict, ttl: int = _DEFAULT_TTL):
         # provider -> model -> PricingInfo
         self._cache: dict[str, dict[str, PricingInfo]] = {}
         # prefix -> currency (for find_cost lookups)
@@ -87,7 +87,7 @@ class PricingCache:
         Expected response: OpenRouter-style ``{model_id: {pricing: {input, output}}}``
         or flat ``{model_id: {input_cost_per_token, output_cost_per_token}}``.
         """
-        instance = cls(providers=[], ttl=ttl)
+        instance = cls(providers={}, ttl=ttl)
         instance._endpoint_url = url
         instance._endpoint_prefix = prefix
         instance._endpoint_currency = currency
@@ -170,8 +170,7 @@ class PricingCache:
             )
 
         # Provider-based mode (LLM Hub)
-        # TODO when llm hub is enabled, self._providers is dict, not list
-        for provider in self._providers:
+        for _, provider in self._providers.items():
             config = provider.config
             prefix = config.prefix
 
