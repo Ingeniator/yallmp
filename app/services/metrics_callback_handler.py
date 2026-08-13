@@ -75,7 +75,6 @@ class MetricsCallbackHandler(BaseCallbackHandler):
         self.request_model = request_model
 
     def on_llm_end(self, response, **kwargs):
-        logger.info("on_llm_end method start")
         group_id = self.metadata.group_id if self.metadata else "unknown"
         chain_name = self.metadata.chain_name if self.metadata else "unknown"
         chain_type = (
@@ -125,10 +124,6 @@ class MetricsCallbackHandler(BaseCallbackHandler):
 
         # Cost tracking — use request model name for pricing lookup (matches pricing cache)
         pricing_model = self.request_model or model_name
-        logger.info(
-            f"{self.request_model} {model_name} {self.currency} {self.provider_prefix}"
-        )
-        logger.info(f"Pricing cache {self.pricing_cache}")
         if self.provider_prefix is not None and self.pricing_cache and self.currency:
             cost = self.pricing_cache.get_cost(
                 self.provider_prefix,
@@ -148,10 +143,6 @@ class MetricsCallbackHandler(BaseCallbackHandler):
                     group_id=group_id,
                 )
 
-                logger.info(f"{self.provider_prefix} {model_name} {cost.total}")
-
                 llm_cost.labels(**cost_labels).inc(cost.total)
                 llm_input_cost.labels(**cost_labels).inc(cost.input)
                 llm_output_cost.labels(**cost_labels).inc(cost.output)
-
-        logger.info("on_llm_end method end")

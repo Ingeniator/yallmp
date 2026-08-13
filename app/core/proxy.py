@@ -584,8 +584,6 @@ def _emit_completions_metrics(
     if not _is_traceable_path(path):
         return
 
-    logger.info("emit metrics start")
-
     if response_data.get("usage"):
         response_data = {
             **response_data,
@@ -606,16 +604,14 @@ def _emit_completions_metrics(
 
     # Resolve pricing if not already known
     pfx, cur = provider_prefix, currency
-    logger.info(f"606 {pfx} {cur}")
     if pfx is None and pricing_cache:
-        logger.info("pricing cache")
         usage = response_data.get("usage", {})
         found = pricing_cache.find_cost(
             request_model or response_data.get("model", ""),
             usage.get("prompt_tokens", 0),
             usage.get("completion_tokens", 0),
         )
-        logger.info(f"found {found}")
+
         if found:
             pfx, cur, _ = found
 
@@ -718,12 +714,8 @@ async def _do_proxy_request(
     backoff_factor: float | None = None,
 ) -> JSONResponse | StreamingResponse:
     """Core proxy logic shared by legacy single-provider and multi-provider paths."""
-    logger.info("_do_proxy_request")
-    logger.info(f"{provider_prefix} {provider_currency}")
 
-    is_streaming = _detect_streaming(method, body)
-    logger.info(f"is_streaming {is_streaming}")
-    if is_streaming:
+    if _detect_streaming(method, body):
         return await _handle_streaming_request(
             client=client,
             target_url=target_url,
@@ -748,16 +740,15 @@ async def _do_proxy_request(
         base_delay=base_delay,
         backoff_factor=backoff_factor,
     )
-    logger.info("wtf?")
+
     if (
         isinstance(response, HTTPXResponse)
         and response.status_code in _SUCCESS_STATUS_CODES
     ):
-        logger.info(
+        logger.debug(
             f"Proxy request successful: {method} {target_url} -> {response.status_code}"
         )
 
-        logger.info(f"is traceable path {_is_traceable_path(path)}")
         if _is_traceable_path(path):
             response_data = json.loads(response.text)
             _emit_completions_metrics(
@@ -811,7 +802,6 @@ async def proxy_request_with_retries(
         if body is None:
             body = await request.body()
 
-        logger.info("This is right place!")
         return await _do_proxy_request(
             client=client,
             target_url=target_url,
@@ -1127,9 +1117,6 @@ async def proxy_request_to_provider(
     pricing_cache=None,
 ):
     """Route a request to a specific LLM provider, stripping the model prefix."""
-    logger.info(
-        f"provider {str(provider.config.prefix)} {str(provider.config.currency)}"
-    )
 
     config = provider.config
     target_url = f"{config.base_url}/{path}"

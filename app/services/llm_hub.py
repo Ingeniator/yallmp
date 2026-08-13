@@ -69,7 +69,6 @@ class LlmHub:
 
     def load_providers(self, directory: str | None = None):
         directory = directory or settings.llm_hub_directory
-        logger.info(f"providers directory {directory}")
         hub_path = Path(directory)
         if not hub_path.is_dir():
             logger.warning(f"LLM hub directory not found: {hub_path}")
@@ -77,7 +76,6 @@ class LlmHub:
 
         seen_prefixes: set[str] = set()
         files = sorted(hub_path.glob("*.json"))
-        logger.info(f"providers files {files}")
         for json_file in files:
             try:
                 raw = json_file.read_text(encoding="utf-8")

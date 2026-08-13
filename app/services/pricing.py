@@ -118,11 +118,11 @@ class PricingCache:
     ) -> CostBreakdown | None:
         models = self._cache.get(provider_prefix)
         if not models:
-            logger.info("get_cost: no cache for provider", provider=provider_prefix)
+            logger.warning("get_cost: no cache for provider", provider=provider_prefix)
             return None
         pricing = models.get(model_name)
         if not pricing:
-            logger.info(
+            logger.warning(
                 "get_cost: model not found in pricing",
                 model=model_name,
                 provider=provider_prefix,
@@ -163,7 +163,6 @@ class PricingCache:
         # Standalone endpoint mode (from_endpoint factory)
         endpoint_url = getattr(self, "_endpoint_url", None)
         if endpoint_url:
-            logger.info("refresh price cache")
             await self._fetch_endpoint(
                 endpoint_url,
                 self._endpoint_prefix,
@@ -171,10 +170,8 @@ class PricingCache:
             )
 
         # Provider-based mode (LLM Hub)
-        logger.info(f"providers {self._providers}")
         # TODO when llm hub is enabled, self._providers is dict, not list
         for provider in self._providers:
-            logger.info(f"provider {provider}")
             config = provider.config
             prefix = config.prefix
 
@@ -208,14 +205,11 @@ class PricingCache:
         verify_ssl: bool = True,
     ) -> bool:
         """Fetch pricing from a remote URL. Returns True on success."""
-        logger.info("start fetching")
         try:
             async with httpx.AsyncClient(verify=verify_ssl, timeout=30) as client:
                 resp = await client.get(url)
             if resp.status_code == 200:
-                response = resp.json()
-                logger.info(f"RESPONSE {response}")
-                parsed = self._parse_pricing_response(response)
+                parsed = self._parse_pricing_response(resp.json())
                 if parsed:
                     self._cache[prefix] = parsed
                     self._currencies[prefix] = currency
@@ -224,14 +218,14 @@ class PricingCache:
                     )
                     return True
                 else:
-                    logger.error("Parsed price with error")
+                    logger.error("_fetch_endpoint: Parsed price with error")
             else:
                 error = resp.json()
                 logger.error(
                     f"Get price from {url}: status {resp.status_code}. Error - {error}"
                 )
         except Exception as e:
-            logger.warning(f"Failed to fetch pricing from {url} for '{prefix}': {e}")
+            logger.error(f"Failed to fetch pricing from {url} for '{prefix}': {e}")
         return False
 
     @staticmethod
