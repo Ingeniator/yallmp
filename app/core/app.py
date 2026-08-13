@@ -599,7 +599,6 @@ def create_app() -> FastAPI:
             request: Request,
             custom_headers: dict[str, str] = Depends(add_authz_header),
         ):
-            logger.info("proxy request")
             llm_hub: LlmHub = app.state.llm_hub
 
             # Multi-provider routing for POST requests when hub is enabled
@@ -611,14 +610,10 @@ def create_app() -> FastAPI:
                 except (json.JSONDecodeError, AttributeError):
                     model = ""
 
-                logger.info(f"MODEL {model}")
                 if model:
-                    logger.info(f"MODEL IN {model}")
                     alias = llm_hub.resolve_alias(model)
                     if alias:
-                        logger.info(f"ALIAS {alias}")
                         primary = llm_hub.resolve_model(alias.target)
-                        logger.info(f"PRIMARY {primary}")
                         if primary:
                             p_provider, p_stripped = primary
                             p_headers = await p_provider.get_auth_headers()
