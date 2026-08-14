@@ -55,7 +55,7 @@ async def lifespan(app: FastAPI):
         from app.services.pricing import PricingCache
 
         logger.info(
-            f"INIT PARAMS {settings.proxy_pricing_endpoint} {settings.proxy_pricing_prefix} {settings.proxy_pricing_currency}"
+            f"Init pricing cache {settings.proxy_pricing_endpoint} {settings.proxy_pricing_prefix} {settings.proxy_pricing_currency}"
         )
         pricing_cache = PricingCache.from_endpoint(
             url=settings.proxy_pricing_endpoint,

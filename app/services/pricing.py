@@ -121,6 +121,12 @@ class PricingCache:
             logger.warning("get_cost: no cache for provider", provider=provider_prefix)
             return None
         pricing = models.get(model_name)
+        if pricing is None:
+            model_name_list = model_name.split("/")
+            if len(model_name_list) > 1:
+                model_name = model_name_list[1]
+                pricing = models.get(model_name)
+
         if not pricing:
             logger.warning(
                 "get_cost: model not found in pricing",
