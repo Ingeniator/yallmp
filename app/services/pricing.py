@@ -128,11 +128,10 @@ class PricingCache:
                 pricing = models.get(model_name)
 
         if not pricing:
-            logger.warning(
+            logger.error(
                 "get_cost: model not found in pricing",
                 model=model_name,
                 provider=provider_prefix,
-                available=list(models.keys()),
             )
             return None
         input_cost = prompt_tokens * pricing.input_cost_per_token
