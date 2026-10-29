@@ -1,9 +1,11 @@
-
 from fastapi import FastAPI, Depends, Request
 from app.core.config import settings
 from app.core.logging_config import setup_logging
 from app.middlewares.logging_middleware import LoggingMiddleware
-from app.middlewares.metrics_middleware import PrometheusMiddleware, get_metrics_registry
+from app.middlewares.metrics_middleware import (
+    PrometheusMiddleware,
+    get_metrics_registry,
+)
 from app.schemas.health import HealthCheck
 from app.schemas.prompt import ChainMetadataForTracking, ChainType
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,7 +15,10 @@ import asyncio
 import json
 import pathlib
 
+from app.services.llm_hub import LlmHub
+
 logger = setup_logging()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -21,6 +26,7 @@ async def lifespan(app: FastAPI):
     client = None
     if settings.proxy_enabled:
         from app.core.proxy import create_async_client
+
         client = await create_async_client()
 
     app.state.client = client
@@ -28,6 +34,7 @@ async def lifespan(app: FastAPI):
     # Always create LlmHub so aliases are available even in single-provider mode.
     # Providers are only loaded/started when llm_hub_enabled is True.
     from app.services.llm_hub import LlmHub
+
     llm_hub = LlmHub()
     if settings.llm_hub_enabled:
         llm_hub.load_providers()
@@ -41,10 +48,15 @@ async def lifespan(app: FastAPI):
     pricing_cache = None
     if llm_hub and llm_hub.providers:
         from app.services.pricing import PricingCache
+
         pricing_cache = PricingCache(llm_hub.providers)
         await pricing_cache.startup()
     elif settings.proxy_pricing_endpoint:
         from app.services.pricing import PricingCache
+
+        logger.info(
+            f"Init pricing cache {settings.proxy_pricing_endpoint} {settings.proxy_pricing_prefix} {settings.proxy_pricing_currency}"
+        )
         pricing_cache = PricingCache.from_endpoint(
             url=settings.proxy_pricing_endpoint,
             prefix=settings.proxy_pricing_prefix,
@@ -53,6 +65,7 @@ async def lifespan(app: FastAPI):
         await pricing_cache.startup()
     elif settings.proxy_pricing_config:
         from app.services.pricing import PricingCache
+
         pricing_cache = PricingCache.from_json(settings.proxy_pricing_config)
 
     app.state.pricing_cache = pricing_cache
@@ -61,6 +74,7 @@ async def lifespan(app: FastAPI):
     search_hub = None
     if settings.search_hub_enabled:
         from app.services.search_hub import SearchHub
+
         search_hub = SearchHub()
         search_hub.load_providers()
         await search_hub.startup()
@@ -74,14 +88,20 @@ async def lifespan(app: FastAPI):
     if settings.billing_enabled:
         import redis.asyncio as aioredis
         from app.services.billing import load_limits
-        app.state.billing_redis = aioredis.from_url(settings.billing_redis_url, decode_responses=True)
+
+        app.state.billing_redis = aioredis.from_url(
+            settings.billing_redis_url, decode_responses=True
+        )
         app.state.billing_limits = load_limits(settings.billing_limits_path)
         logger.info("Billing enabled", redis_url=settings.billing_redis_url)
 
         sync_url = settings.billing_sync_url or settings.tracing_host or ""
         if sync_url:
             from app.services.billing_sync import sync_from_llogr, billing_sync_loop
-            await sync_from_llogr(app.state.billing_redis, app.state.billing_limits, sync_url)
+
+            await sync_from_llogr(
+                app.state.billing_redis, app.state.billing_limits, sync_url
+            )
             app.state.billing_sync_task = asyncio.create_task(
                 billing_sync_loop(
                     app.state.billing_redis,
@@ -90,7 +110,11 @@ async def lifespan(app: FastAPI):
                     settings.billing_sync_interval,
                 )
             )
-            logger.info("Billing sync started", url=sync_url, interval=settings.billing_sync_interval)
+            logger.info(
+                "Billing sync started",
+                url=sync_url,
+                interval=settings.billing_sync_interval,
+            )
 
     yield
 
@@ -111,6 +135,7 @@ async def lifespan(app: FastAPI):
         await search_hub.shutdown()
 
     from app.services.tracing import shutdown as tracing_shutdown
+
     tracing_shutdown()
 
     if llm_hub:
@@ -119,9 +144,15 @@ async def lifespan(app: FastAPI):
         await app.state.client.aclose()
     logger.info("Application shutdown...")
 
+
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
-    app = FastAPI(title=settings.app_name, debug=settings.debug, root_path=settings.root_path, lifespan=lifespan)
+    app = FastAPI(
+        title=settings.app_name,
+        debug=settings.debug,
+        root_path=settings.root_path,
+        lifespan=lifespan,
+    )
 
     app.add_middleware(
         CORSMiddleware,
@@ -134,15 +165,20 @@ def create_app() -> FastAPI:
     app.add_middleware(LoggingMiddleware)
     # Add Billing Middleware (limit enforcement, runs before Prometheus)
     from app.middlewares.billing_middleware import BillingMiddleware
+
     app.add_middleware(BillingMiddleware)
     # Add Prometheus middleware
     app.add_middleware(PrometheusMiddleware)
 
     # Expose metrics endpoint
     from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+
     @app.get("/metrics")
     async def get_metrics():
-        return Response(content=generate_latest(get_metrics_registry()), media_type=CONTENT_TYPE_LATEST)
+        return Response(
+            content=generate_latest(get_metrics_registry()),
+            media_type=CONTENT_TYPE_LATEST,
+        )
 
     @app.get("/livez")
     async def livez():
@@ -177,7 +213,11 @@ def create_app() -> FastAPI:
                     break
 
         search_hub_state = getattr(app.state, "search_hub", None)
-        if settings.search_hub_enabled and search_hub_state and search_hub_state.providers:
+        if (
+            settings.search_hub_enabled
+            and search_hub_state
+            and search_hub_state.providers
+        ):
             for name, sp in search_hub_state.providers.items():
                 cb = await sp.circuit_breaker.get_status()
                 if cb["circuit_open"]:
@@ -186,8 +226,12 @@ def create_app() -> FastAPI:
 
         enabled = {k: v for k, v in components.items() if v != "disabled"}
         if all(v == "ok" for v in enabled.values()):
-            return JSONResponse(status_code=200, content={"status": "ok", "components": components})
-        return JSONResponse(status_code=503, content={"status": "degraded", "components": components})
+            return JSONResponse(
+                status_code=200, content={"status": "ok", "components": components}
+            )
+        return JSONResponse(
+            status_code=503, content={"status": "degraded", "components": components}
+        )
 
     @app.get("/health")
     async def health_check() -> HealthCheck:
@@ -233,7 +277,11 @@ def create_app() -> FastAPI:
 
         # Check Search Hub provider circuit breakers
         search_hub_state = getattr(app.state, "search_hub", None)
-        if settings.search_hub_enabled and search_hub_state and search_hub_state.providers:
+        if (
+            settings.search_hub_enabled
+            and search_hub_state
+            and search_hub_state.providers
+        ):
             search_statuses = {}
             for name, sp in search_hub_state.providers.items():
                 cb = await sp.circuit_breaker.get_status()
@@ -249,9 +297,12 @@ def create_app() -> FastAPI:
                 details["tracing"] = "tracing_host is not configured"
             else:
                 import httpx as _httpx
+
                 try:
                     async with _httpx.AsyncClient(timeout=3) as client:
-                        resp = await client.get(f"{settings.tracing_host.rstrip('/')}/livez")
+                        resp = await client.get(
+                            f"{settings.tracing_host.rstrip('/')}/livez"
+                        )
                         resp.raise_for_status()
                     components["tracing"] = "ok"
                 except Exception as exc:
@@ -270,7 +321,6 @@ def create_app() -> FastAPI:
             details=details if details else None,
         )
 
-
     if settings.debug_network_check:
         import socket as _socket
         import time as _time
@@ -279,9 +329,24 @@ def create_app() -> FastAPI:
         @app.get("/debug/network-check")
         async def debug_network_check():
             targets = [
-                {"provider": "exa", "host": "api.exa.ai", "port": 443, "url": "https://api.exa.ai"},
-                {"provider": "tavily", "host": "api.tavily.com", "port": 443, "url": "https://api.tavily.com"},
-                {"provider": "brave", "host": "api.search.brave.com", "port": 443, "url": "https://api.search.brave.com"},
+                {
+                    "provider": "exa",
+                    "host": "api.exa.ai",
+                    "port": 443,
+                    "url": "https://api.exa.ai",
+                },
+                {
+                    "provider": "tavily",
+                    "host": "api.tavily.com",
+                    "port": 443,
+                    "url": "https://api.tavily.com",
+                },
+                {
+                    "provider": "brave",
+                    "host": "api.search.brave.com",
+                    "port": 443,
+                    "url": "https://api.search.brave.com",
+                },
             ]
 
             results = []
@@ -298,7 +363,9 @@ def create_app() -> FastAPI:
                 }
 
                 try:
-                    addrinfo = _socket.getaddrinfo(target["host"], target["port"], type=_socket.SOCK_STREAM)
+                    addrinfo = _socket.getaddrinfo(
+                        target["host"], target["port"], type=_socket.SOCK_STREAM
+                    )
                     resolved_ips = sorted({item[4][0] for item in addrinfo})
                     result["dns_ok"] = True
                     result["resolved_ips"] = resolved_ips
@@ -309,26 +376,39 @@ def create_app() -> FastAPI:
 
                 tcp_start = _time.monotonic()
                 try:
-                    with _socket.create_connection((target["host"], target["port"]), timeout=5):
+                    with _socket.create_connection(
+                        (target["host"], target["port"]), timeout=5
+                    ):
                         pass
                     result["tcp_connect_ok"] = True
-                    result["tcp_connect_duration_ms"] = round((_time.monotonic() - tcp_start) * 1000, 2)
+                    result["tcp_connect_duration_ms"] = round(
+                        (_time.monotonic() - tcp_start) * 1000, 2
+                    )
                 except Exception as exc:
                     result["tcp_error"] = f"{type(exc).__name__}: {exc}"
-                    result["tcp_connect_duration_ms"] = round((_time.monotonic() - tcp_start) * 1000, 2)
+                    result["tcp_connect_duration_ms"] = round(
+                        (_time.monotonic() - tcp_start) * 1000, 2
+                    )
                     results.append(result)
                     continue
 
                 https_start = _time.monotonic()
                 try:
-                    async with _httpx.AsyncClient(timeout=_httpx.Timeout(connect=5, read=10, write=10, pool=5), follow_redirects=True) as client:
+                    async with _httpx.AsyncClient(
+                        timeout=_httpx.Timeout(connect=5, read=10, write=10, pool=5),
+                        follow_redirects=True,
+                    ) as client:
                         resp = await client.get(target["url"])
                     result["https_ok"] = True
                     result["https_status_code"] = resp.status_code
-                    result["https_duration_ms"] = round((_time.monotonic() - https_start) * 1000, 2)
+                    result["https_duration_ms"] = round(
+                        (_time.monotonic() - https_start) * 1000, 2
+                    )
                 except Exception as exc:
                     result["https_error"] = f"{type(exc).__name__}: {exc}"
-                    result["https_duration_ms"] = round((_time.monotonic() - https_start) * 1000, 2)
+                    result["https_duration_ms"] = round(
+                        (_time.monotonic() - https_start) * 1000, 2
+                    )
 
                 results.append(result)
 
@@ -338,9 +418,12 @@ def create_app() -> FastAPI:
         from app.services.dashboard import get_dashboard_json
         from app.core.security import sanitize_group_id
 
-        _dashboard_html = pathlib.Path(__file__).resolve().parent.parent.joinpath(
-            "templates", "dashboard.html"
-        ).read_text()
+        _dashboard_html = (
+            pathlib.Path(__file__)
+            .resolve()
+            .parent.parent.joinpath("templates", "dashboard.html")
+            .read_text()
+        )
 
         def _effective_identity(request: Request) -> tuple[str, str]:
             """Return (role, group_id), applying dev cookie override when enabled."""
@@ -348,6 +431,7 @@ def create_app() -> FastAPI:
             group_id = sanitize_group_id(request.headers.get("x-group-id", ""))
             if settings.dashboard_dev_role_switcher:
                 from urllib.parse import unquote
+
                 cookie_role = request.cookies.get("dev_role", "").upper()
                 cookie_group = unquote(request.cookies.get("dev_group", ""))
                 if cookie_role:
@@ -376,7 +460,9 @@ def create_app() -> FastAPI:
                 group_id=group_id,
                 is_org_admin=role == "ORG_ADMIN",
                 is_super_admin=role == "SUPER_ADMIN",
-                time_window=time_window, start=start, end=end,
+                time_window=time_window,
+                start=start,
+                end=end,
             )
 
         @app.get("/dashboard/api/trends")
@@ -390,10 +476,14 @@ def create_app() -> FastAPI:
             if settings.dashboard_metrics_backend != "prometheus":
                 return {"available": False, "labels": [], "series": []}
             from app.services.dashboard_prometheus import fetch_cost_trends
+
             role, group_id = _effective_identity(request)
             prom_auth = None
             if settings.dashboard_prometheus_user:
-                prom_auth = (settings.dashboard_prometheus_user, settings.dashboard_prometheus_password)
+                prom_auth = (
+                    settings.dashboard_prometheus_user,
+                    settings.dashboard_prometheus_password,
+                )
             prom_verify = (
                 settings.dashboard_prometheus_ca_bundle
                 if settings.dashboard_prometheus_ca_bundle
@@ -432,6 +522,7 @@ def create_app() -> FastAPI:
             if not settings.tracing_host:
                 return {"sessions": []}
             import httpx as _httpx
+
             role, group_id = _effective_identity(request)
             params = {"limit": limit, "offset": offset}
             if start:
@@ -455,6 +546,7 @@ def create_app() -> FastAPI:
             if not settings.tracing_host:
                 return {"session_id": session_id, "traces": []}
             import httpx as _httpx
+
             role, group_id = _effective_identity(request)
             try:
                 async with _httpx.AsyncClient(timeout=30) as client:
@@ -468,28 +560,46 @@ def create_app() -> FastAPI:
                 return {"session_id": session_id, "traces": [], "error": str(exc)}
 
     if settings.proxy_enabled:
-        from app.core.proxy import proxy_request_with_retries, get_model_version, proxy_request_to_provider
+        from app.core.proxy import (
+            proxy_request_with_retries,
+            get_model_version,
+            proxy_request_to_provider,
+        )
         from app.services.llm_authentication import get_authorization_headers
 
         async def add_authz_header():
             return await get_authorization_headers(app.state.client)
 
         @app.api_route("/llm/version", methods=["GET"])
-        async def get_llm_version(request: Request, custom_headers: dict[str, str] = Depends(add_authz_header), model_name: str = "GigaChat"):
-            return await get_model_version(model_name, app.state.client, request, custom_headers)
+        async def get_llm_version(
+            request: Request,
+            custom_headers: dict[str, str] = Depends(add_authz_header),
+            model_name: str = "GigaChat",
+        ):
+            return await get_model_version(
+                model_name, app.state.client, request, custom_headers
+            )
 
         # Models endpoint — must be registered BEFORE the catch-all /llm/{path}
         @app.get("/llm/v1/models")
-        async def get_models(request: Request, custom_headers: dict[str, str] = Depends(add_authz_header)):
+        async def get_models(
+            request: Request, custom_headers: dict[str, str] = Depends(add_authz_header)
+        ):
             llm_hub = app.state.llm_hub
             if llm_hub and llm_hub.providers:
                 return JSONResponse(content=llm_hub.get_merged_models())
             # Fallback: proxy to upstream
-            return await proxy_request_with_retries(app.state.client, "v1/models", request, custom_headers)
+            return await proxy_request_with_retries(
+                app.state.client, "v1/models", request, custom_headers
+            )
 
         @app.api_route("/llm/{full_path:path}", methods=["GET", "POST"])
-        async def proxy_request(full_path: str, request: Request, custom_headers: dict[str, str] = Depends(add_authz_header)):
-            llm_hub = app.state.llm_hub
+        async def proxy_request(
+            full_path: str,
+            request: Request,
+            custom_headers: dict[str, str] = Depends(add_authz_header),
+        ):
+            llm_hub: LlmHub = app.state.llm_hub
 
             # Multi-provider routing for POST requests when hub is enabled
             if request.method == "POST" and llm_hub and llm_hub.providers:
@@ -516,7 +626,11 @@ def create_app() -> FastAPI:
                                 stripped_model=p_stripped,
                                 pricing_cache=app.state.pricing_cache,
                             )
-                            if alias.fallback and isinstance(response, JSONResponse) and response.status_code >= 400:
+                            if (
+                                alias.fallback
+                                and isinstance(response, JSONResponse)
+                                and response.status_code >= 400
+                            ):
                                 fb = llm_hub.resolve_model(alias.fallback)
                                 if fb:
                                     fb_provider, fb_stripped = fb
@@ -559,7 +673,14 @@ def create_app() -> FastAPI:
                         legacy_body = json.dumps(body_json).encode()
                 except (json.JSONDecodeError, AttributeError):
                     pass
-            return await proxy_request_with_retries(app.state.client, full_path, request, custom_headers, pricing_cache=app.state.pricing_cache, body=legacy_body)
+            return await proxy_request_with_retries(
+                app.state.client,
+                full_path,
+                request,
+                custom_headers,
+                pricing_cache=app.state.pricing_cache,
+                body=legacy_body,
+            )
 
     from app.schemas.feedback import FeedbackRequest, FeedbackResponse
     from app.services.tracing import score_trace
@@ -573,7 +694,9 @@ def create_app() -> FastAPI:
         server-side state is required between the request and the feedback.
         """
         if not settings.tracing_enabled:
-            return JSONResponse(status_code=503, content={"detail": "tracing is disabled"})
+            return JSONResponse(
+                status_code=503, content={"detail": "tracing is disabled"}
+            )
 
         group_id = request.headers.get("x-group-id", "unknown")
         trace_id = await score_trace(
@@ -606,20 +729,38 @@ def create_app() -> FastAPI:
             return await get_chain_store().get_chains(category)
 
         @app.post("/chain/execute/{name}")
-        async def chain_execute(request: Request, name: str, data: PromptVariables, model_name: str = None):
-            metadata = ChainMetadataForTracking(chain_type=ChainType.chain, chain_name = name, group_id = request.headers.get("x-group-id", "unknown"))
+        async def chain_execute(
+            request: Request, name: str, data: PromptVariables, model_name: str = None
+        ):
+            metadata = ChainMetadataForTracking(
+                chain_type=ChainType.chain,
+                chain_name=name,
+                group_id=request.headers.get("x-group-id", "unknown"),
+            )
             return await get_chain_store().execute(name, data, model_name, metadata)
 
     if settings.prompt_hub_enabled and settings.chain_hub_enabled:
+
         @app.post("/prompt/execute/{name}")
-        async def execute_prompt(request: Request, name: str, data: PromptVariables, model_name: str = None):
+        async def execute_prompt(
+            request: Request, name: str, data: PromptVariables, model_name: str = None
+        ):
             prompt = await get_prompt_store().format_prompt(name, data)
-            metadata = ChainMetadataForTracking(chain_type=ChainType.prompt, chain_name = name, group_id = request.headers.get("x-group-id", "unknown"))
-            return await get_chain_store().execute_prompt(prompt=prompt, model_name=model_name, metadata=metadata)
+            metadata = ChainMetadataForTracking(
+                chain_type=ChainType.prompt,
+                chain_name=name,
+                group_id=request.headers.get("x-group-id", "unknown"),
+            )
+            return await get_chain_store().execute_prompt(
+                prompt=prompt, model_name=model_name, metadata=metadata
+            )
 
     if settings.search_hub_enabled:
         import time as _time
-        from app.schemas.search import SearchRequest as _SearchRequest, SearchResponse as _SearchResponse
+        from app.schemas.search import (
+            SearchRequest as _SearchRequest,
+            SearchResponse as _SearchResponse,
+        )
         from app.services.tracing import trace_search_request as _trace_search
 
         @app.post("/search", response_model=_SearchResponse)
@@ -629,13 +770,15 @@ def create_app() -> FastAPI:
             Use the ``provider`` field to override the default provider.
             Pass ``X-Group-ID`` and ``X-Request-ID`` headers for tracing and billing.
             """
-            from app.services.metrics_callback_handler import record_search as _record_search
+            from app.services.metrics_callback_handler import (
+                record_search as _record_search,
+            )
 
             hub = request.app.state.search_hub
             provider = hub.resolve(body.provider)
 
-            group_id  = request.headers.get("x-group-id", "unknown")
-            trace_id  = request.headers.get("x-request-id")
+            group_id = request.headers.get("x-group-id", "unknown")
+            trace_id = request.headers.get("x-request-id")
             session_id = request.headers.get("x-session-id")
 
             start = _time.time()
@@ -661,11 +804,15 @@ def create_app() -> FastAPI:
 
             if cost and settings.billing_enabled:
                 import asyncio as _asyncio
+
                 billing_redis = getattr(request.app.state, "billing_redis", None)
                 billing_limits = getattr(request.app.state, "billing_limits", {})
                 if billing_redis:
                     from app.services.billing import charge as _charge
-                    _asyncio.create_task(_charge(billing_redis, billing_limits, group_id, cost))
+
+                    _asyncio.create_task(
+                        _charge(billing_redis, billing_limits, group_id, cost)
+                    )
 
             return response
 
@@ -684,9 +831,12 @@ def create_app() -> FastAPI:
                 ]
             }
 
-        _search_html = pathlib.Path(__file__).resolve().parent.parent.joinpath(
-            "templates", "search.html"
-        ).read_text()
+        _search_html = (
+            pathlib.Path(__file__)
+            .resolve()
+            .parent.parent.joinpath("templates", "search.html")
+            .read_text()
+        )
 
         @app.get("/search/ui")
         async def search_ui():

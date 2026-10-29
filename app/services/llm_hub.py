@@ -75,7 +75,8 @@ class LlmHub:
             return
 
         seen_prefixes: set[str] = set()
-        for json_file in sorted(hub_path.glob("*.json")):
+        files = sorted(hub_path.glob("*.json"))
+        for json_file in files:
             try:
                 raw = json_file.read_text(encoding="utf-8")
                 expanded = os.path.expandvars(raw)
@@ -89,12 +90,16 @@ class LlmHub:
                 config = LlmProviderConfig(**data)
 
                 if config.prefix in seen_prefixes:
-                    logger.error(f"Duplicate prefix '{config.prefix}' in {json_file.name}, skipping")
+                    logger.error(
+                        f"Duplicate prefix '{config.prefix}' in {json_file.name}, skipping"
+                    )
                     continue
 
                 seen_prefixes.add(config.prefix)
                 self.providers[config.prefix] = LlmProvider(config)
-                logger.info(f"Loaded provider '{config.prefix}' from {json_file.name} with {len(config.models)} models")
+                logger.info(
+                    f"Loaded provider '{config.prefix}' from {json_file.name} with {len(config.models)} models"
+                )
 
             except Exception as e:
                 logger.error(f"Failed to load provider from {json_file.name}: {e}")
@@ -117,7 +122,9 @@ class LlmHub:
             data = json.loads(aliases_file.read_text(encoding="utf-8"))
             for name, entry in data.items():
                 self.aliases[name] = AliasEntry(**entry)
-            logger.info(f"Loaded {len(self.aliases)} model aliases from {aliases_file.name}")
+            logger.info(
+                f"Loaded {len(self.aliases)} model aliases from {aliases_file.name}"
+            )
         except Exception as e:
             logger.error(f"Failed to load aliases from {aliases_file}: {e}")
 
@@ -153,10 +160,12 @@ class LlmHub:
         data = []
         for prefix, provider in self.providers.items():
             for model in provider.config.models:
-                data.append({
-                    "id": f"{prefix}/{model}",
-                    "object": "model",
-                    "owned_by": prefix,
-                    "created": 0,
-                })
+                data.append(
+                    {
+                        "id": f"{prefix}/{model}",
+                        "object": "model",
+                        "owned_by": prefix,
+                        "created": 0,
+                    }
+                )
         return {"object": "list", "data": data}

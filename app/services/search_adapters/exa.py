@@ -28,9 +28,9 @@ class ExaAdapter(SearchAdapter):
             "numResults": req.num_results,
             "contents": {
                 "text": {
-                    "maxCharacters": _DEFAULT_MAX_CHARS
-                    if not req.include_raw_content
-                    else None,
+                    "maxCharacters": (
+                        _DEFAULT_MAX_CHARS if not req.include_raw_content else None
+                    ),
                 },
             },
         }
@@ -40,7 +40,7 @@ class ExaAdapter(SearchAdapter):
             payload["excludeDomains"] = req.exclude_domains
 
         response = await client.post(
-            "/search",
+            "/exa/search",
             json=payload,
             headers=auth_headers,
         )

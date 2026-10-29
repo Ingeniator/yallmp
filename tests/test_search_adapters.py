@@ -2,6 +2,7 @@
 
 All HTTP calls are mocked — no real network traffic.
 """
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
@@ -9,12 +10,13 @@ from app.schemas.search import SearchRequest, SearchResponse
 from app.services.search_adapters.tavily import TavilyAdapter
 from app.services.search_adapters.exa import ExaAdapter
 from app.services.search_adapters.brave import BraveAdapter
+from app.services.search_adapters.yandex import YandexAdapter
 from app.services.search_adapters import get_adapter
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _mock_response(json_data: dict, status_code: int = 200):
     """Return an AsyncMock httpx.Response-like object."""
@@ -64,7 +66,9 @@ async def test_tavily_basic_search():
     client = _mock_client(_mock_response(TAVILY_RESPONSE))
     req = SearchRequest(query="python asyncio", num_results=5)
 
-    result = await adapter.search(client, {"X-Tvly-Api-Key": "key"}, req, "tavily")
+    result = await adapter.search(
+        client, {"Authorization": "Bearer key"}, req, "tavily"
+    )
 
     assert isinstance(result, SearchResponse)
     assert result.provider == "tavily"
@@ -286,8 +290,162 @@ async def test_brave_empty_web_results():
 
 
 # ---------------------------------------------------------------------------
+# YandexAdapter
+# ---------------------------------------------------------------------------
+
+YANDEX_XML = """<?xml version="1.0" encoding="utf-8"?>
+<yandexsearch version="1.0">
+<response date="20260807T154024">
+<results>
+<grouping attr="d">
+<group>
+<doc id="Z1">
+<url>https://translate.yandex.ru/hi</url>
+<domain>translate.yandex.ru</domain>
+<title><hlword>Hi</hlword> - \u043e\u043d\u043b\u0430\u0439\u043d \u043f\u0435\u0440\u0435\u0432\u043e\u0434</title>
+<passages>
+<passage>\u041f\u0435\u0440\u0435\u0432\u043e\u0434 \u0441\u043b\u043e\u0432\u0430 "<hlword>Hi</hlword>" \u0441 \u0430\u043d\u0433\u043b\u0438\u0439\u0441\u043a\u043e\u0433\u043e.</passage>
+<passage>\u0412\u0442\u043e\u0440\u043e\u0439 \u043f\u0430\u0441\u0441\u0430\u0436.</passage>
+</passages>
+<properties>
+<extended-text>hi. \u0411\u044b\u0441\u0442\u0440\u044b\u0439 \u043f\u0435\u0440\u0435\u0432\u043e\u0434.</extended-text>
+</properties>
+</doc>
+</group>
+<group>
+<doc id="Z2">
+<url>https://www.wordreference.com/enru/hi</url>
+<domain>www.wordreference.com</domain>
+<title><hlword>hi</hlword> - \u0410\u043d\u0433\u043b\u043e-\u0440\u0443\u0441\u0441\u043a\u0438\u0439 \u0441\u043b\u043e\u0432\u0430\u0440\u044c</title>
+<headline><hlword>hi</hlword> - \u0411\u0435\u0441\u043f\u043b\u0430\u0442\u043d\u044b\u0439 \u043e\u043d\u043b\u0430\u0439\u043d \u0441\u043b\u043e\u0432\u0430\u0440\u044c.</headline>
+<properties>
+<extended-text>hi. [links].</extended-text>
+</properties>
+</doc>
+</group>
+</grouping>
+</results>
+</response>
+</yandexsearch>
+"""
+
+YANDEX_RESPONSE = {"raw_text": YANDEX_XML}
+
+
+@pytest.mark.asyncio
+async def test_yandex_basic_search():
+    adapter = YandexAdapter()
+    client = _mock_client(_mock_response(YANDEX_RESPONSE))
+    req = SearchRequest(query="hi")
+
+    result = await adapter.search(client, {"X-API-Key": "key"}, req, "yandex")
+
+    assert result.provider == "yandex"
+    assert result.query == "hi"
+    assert result.answer is None
+    assert len(result.results) == 2
+    assert result.results[0].url == "https://translate.yandex.ru/hi"
+    # <hlword> markup is stripped, inner text preserved
+    assert result.results[0].title == "Hi - онлайн перевод"
+    assert result.results[0].content == 'Перевод слова "Hi" с английского. Второй пассаж.'
+    assert result.results[0].score == pytest.approx(1.0)
+    assert result.results[1].score == pytest.approx(0.9)
+
+
+@pytest.mark.asyncio
+async def test_yandex_falls_back_to_headline():
+    adapter = YandexAdapter()
+    client = _mock_client(_mock_response(YANDEX_RESPONSE))
+    req = SearchRequest(query="hi")
+
+    result = await adapter.search(client, {}, req, "yandex")
+
+    # Second doc has no <passages>, should use <headline>
+    assert result.results[1].content == "hi - Бесплатный онлайн словарь."
+
+
+@pytest.mark.asyncio
+async def test_yandex_raw_content_only_when_requested():
+    adapter = YandexAdapter()
+    req = SearchRequest(query="hi")
+
+    result = await adapter.search(
+        _mock_client(_mock_response(YANDEX_RESPONSE)), {}, req, "yandex"
+    )
+    assert result.results[0].raw_content is None
+
+    req_raw = SearchRequest(query="hi", include_raw_content=True)
+    result_raw = await adapter.search(
+        _mock_client(_mock_response(YANDEX_RESPONSE)), {}, req_raw, "yandex"
+    )
+    assert result_raw.results[0].raw_content == "hi. Быстрый перевод."
+
+
+@pytest.mark.asyncio
+async def test_yandex_builds_payload():
+    adapter = YandexAdapter()
+    client = _mock_client(_mock_response(YANDEX_RESPONSE))
+    req = SearchRequest(query="python asyncio", num_results=7)
+
+    await adapter.search(client, {}, req, "yandex")
+
+    payload = client.post.call_args.kwargs.get("json", {})
+    assert payload["query"] == {
+        "searchType": "SEARCH_TYPE_RU",
+        "queryText": "python asyncio",
+    }
+    assert payload["groupSpec"]["groupsOnPage"] == "7"
+
+
+@pytest.mark.asyncio
+async def test_yandex_ignores_domain_filters():
+    adapter = YandexAdapter()
+    client = _mock_client(_mock_response(YANDEX_RESPONSE))
+    req = SearchRequest(
+        query="q",
+        include_domains=["a.com"],
+        exclude_domains=["b.com"],
+    )
+
+    await adapter.search(client, {}, req, "yandex")
+
+    payload = client.post.call_args.kwargs.get("json", {})
+    # Yandex has no domain filter parameters; the query must stay untouched.
+    assert payload["query"]["queryText"] == "q"
+    assert "includeDomains" not in payload
+    assert "excludeDomains" not in payload
+
+
+@pytest.mark.asyncio
+async def test_yandex_empty_raw_text():
+    adapter = YandexAdapter()
+    client = _mock_client(_mock_response({"raw_text": ""}))
+    req = SearchRequest(query="nothing")
+
+    result = await adapter.search(client, {}, req, "yandex")
+
+    assert result.results == []
+    assert result.answer is None
+
+
+@pytest.mark.asyncio
+async def test_yandex_rejects_doctype():
+    adapter = YandexAdapter()
+    bomb = (
+        '<?xml version="1.0"?><!DOCTYPE l [<!ENTITY a "aaaaaaaaaa">]>'
+        "<yandexsearch>&a;</yandexsearch>"
+    )
+    client = _mock_client(_mock_response({"raw_text": bomb}))
+    req = SearchRequest(query="q")
+
+    with pytest.raises(ValueError, match="DOCTYPE"):
+        await adapter.search(client, {}, req, "yandex")
+
+
+# ---------------------------------------------------------------------------
 # get_adapter factory
 # ---------------------------------------------------------------------------
+
 
 def test_get_adapter_tavily():
     a = get_adapter("tavily")
@@ -302,6 +460,11 @@ def test_get_adapter_exa():
 def test_get_adapter_brave():
     a = get_adapter("brave")
     assert isinstance(a, BraveAdapter)
+
+
+def test_get_adapter_yandex():
+    a = get_adapter("yandex")
+    assert isinstance(a, YandexAdapter)
 
 
 def test_get_adapter_unknown_raises():

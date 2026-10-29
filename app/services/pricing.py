@@ -15,6 +15,7 @@ logger = setup_logging()
 @dataclass
 class CostBreakdown:
     """Per-call cost split into input (prompt) and output (completion) components."""
+
     input: float
     output: float
     total: float
@@ -22,13 +23,14 @@ class CostBreakdown:
     def __bool__(self) -> bool:
         return self.total != 0
 
+
 _DEFAULT_TTL = 86400  # 24 hours
 
 
 class PricingCache:
     """Fetches and caches per-model pricing for LLM providers."""
 
-    def __init__(self, providers: list, ttl: int = _DEFAULT_TTL):
+    def __init__(self, providers: dict, ttl: int = _DEFAULT_TTL):
         # provider -> model -> PricingInfo
         self._cache: dict[str, dict[str, PricingInfo]] = {}
         # prefix -> currency (for find_cost lookups)
@@ -85,7 +87,7 @@ class PricingCache:
         Expected response: OpenRouter-style ``{model_id: {pricing: {input, output}}}``
         or flat ``{model_id: {input_cost_per_token, output_cost_per_token}}``.
         """
-        instance = cls(providers=[], ttl=ttl)
+        instance = cls(providers={}, ttl=ttl)
         instance._endpoint_url = url
         instance._endpoint_prefix = prefix
         instance._endpoint_currency = currency
@@ -116,20 +118,27 @@ class PricingCache:
     ) -> CostBreakdown | None:
         models = self._cache.get(provider_prefix)
         if not models:
-            logger.debug("get_cost: no cache for provider", provider=provider_prefix)
+            logger.warning("get_cost: no cache for provider", provider=provider_prefix)
             return None
         pricing = models.get(model_name)
+        if pricing is None:
+            model_name_list = model_name.split("/")
+            if len(model_name_list) > 1:
+                model_name = model_name_list[1]
+                pricing = models.get(model_name)
+
         if not pricing:
-            logger.debug(
+            logger.error(
                 "get_cost: model not found in pricing",
                 model=model_name,
                 provider=provider_prefix,
-                available=list(models.keys()),
             )
             return None
         input_cost = prompt_tokens * pricing.input_cost_per_token
         output_cost = completion_tokens * pricing.output_cost_per_token
-        return CostBreakdown(input=input_cost, output=output_cost, total=input_cost + output_cost)
+        return CostBreakdown(
+            input=input_cost, output=output_cost, total=input_cost + output_cost
+        )
 
     def find_cost(
         self,
@@ -165,7 +174,7 @@ class PricingCache:
             )
 
         # Provider-based mode (LLM Hub)
-        for provider in self._providers:
+        for _, provider in self._providers.items():
             config = provider.config
             prefix = config.prefix
 
@@ -173,7 +182,10 @@ class PricingCache:
             if config.pricing_endpoint:
                 url = f"{config.base_url}{config.pricing_endpoint}"
                 ok = await self._fetch_endpoint(
-                    url, prefix, config.currency or "USD", verify_ssl=config.verify_ssl,
+                    url,
+                    prefix,
+                    config.currency or "USD",
+                    verify_ssl=config.verify_ssl,
                 )
                 if ok:
                     continue
@@ -208,8 +220,15 @@ class PricingCache:
                         f"Loaded dynamic pricing for '{prefix}' from {url}: {len(parsed)} models"
                     )
                     return True
+                else:
+                    logger.error("_fetch_endpoint: Parsed price with error")
+            else:
+                error = resp.json()
+                logger.error(
+                    f"Get price from {url}: status {resp.status_code}. Error - {error}"
+                )
         except Exception as e:
-            logger.warning(f"Failed to fetch pricing from {url} for '{prefix}': {e}")
+            logger.error(f"Failed to fetch pricing from {url} for '{prefix}': {e}")
         return False
 
     @staticmethod
@@ -230,11 +249,20 @@ class PricingCache:
                 try:
                     if not isinstance(item, dict):
                         continue
-                    name = item.get("Public Name") or item.get("public_name") or item.get("name")
+                    name = (
+                        item.get("Public Name")
+                        or item.get("public_name")
+                        or item.get("name")
+                        or item.get("Model")
+                    )
                     if not name:
                         continue
-                    input_cost = float(item.get("Input Cost $", 0) or item.get("input_cost", 0))
-                    output_cost = float(item.get("Output Cost $", 0) or item.get("output_cost", 0))
+                    input_cost = float(
+                        item.get("Input Cost $", 0) or item.get("input_cost", 0)
+                    )
+                    output_cost = float(
+                        item.get("Output Cost $", 0) or item.get("output_cost", 0)
+                    )
                     result[name] = PricingInfo(
                         input_cost_per_token=input_cost / 1_000_000,
                         output_cost_per_token=output_cost / 1_000_000,
