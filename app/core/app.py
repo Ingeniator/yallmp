@@ -616,7 +616,7 @@ def create_app() -> FastAPI:
                         primary = llm_hub.resolve_model(alias.target)
                         if primary:
                             p_provider, p_stripped = primary
-                            p_headers = await p_provider.get_auth_headers()
+                            p_headers = await p_provider.get_auth_headers(request.headers)
                             response = await proxy_request_to_provider(
                                 provider=p_provider,
                                 path=full_path,
@@ -634,7 +634,7 @@ def create_app() -> FastAPI:
                                 fb = llm_hub.resolve_model(alias.fallback)
                                 if fb:
                                     fb_provider, fb_stripped = fb
-                                    fb_headers = await fb_provider.get_auth_headers()
+                                    fb_headers = await fb_provider.get_auth_headers(request.headers)
                                     response = await proxy_request_to_provider(
                                         provider=fb_provider,
                                         path=full_path,
@@ -649,7 +649,7 @@ def create_app() -> FastAPI:
                     resolved = llm_hub.resolve_model(model)
                     if resolved:
                         provider, stripped_model = resolved
-                        provider_headers = await provider.get_auth_headers()
+                        provider_headers = await provider.get_auth_headers(request.headers)
                         return await proxy_request_to_provider(
                             provider=provider,
                             path=full_path,

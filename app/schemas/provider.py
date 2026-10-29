@@ -7,6 +7,8 @@ class AuthType(str, Enum):
     APIKEY = "APIKEY"
     CERT = "CERT"
     NONE = "NONE"
+    # Forward the client's own Authorization / X-API-KEY header to the provider
+    PASSTHROUGH = "PASSTHROUGH"
 
 
 class AuthConfig(BaseModel):

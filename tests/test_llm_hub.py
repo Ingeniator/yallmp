@@ -159,6 +159,36 @@ async def test_provider_get_auth_headers_none():
 
 
 @pytest.mark.asyncio
+async def test_provider_get_auth_headers_passthrough():
+    config = LlmProviderConfig(
+        prefix="test",
+        base_url="http://test",
+        auth=AuthConfig(type=AuthType.PASSTHROUGH),
+    )
+    provider = LlmProvider(config)
+    headers = await provider.get_auth_headers(
+        {"Authorization": "Bearer client-tok", "X-API-KEY": "client-key", "Cookie": "c"}
+    )
+    assert headers == {"Authorization": "Bearer client-tok", "X-API-KEY": "client-key"}
+    assert await provider.get_auth_headers({}) == {}
+    assert await provider.get_auth_headers() == {}
+
+
+@pytest.mark.asyncio
+async def test_provider_get_auth_headers_passthrough_case_insensitive():
+    from starlette.datastructures import Headers
+
+    config = LlmProviderConfig(
+        prefix="test",
+        base_url="http://test",
+        auth=AuthConfig(type=AuthType.PASSTHROUGH),
+    )
+    provider = LlmProvider(config)
+    headers = await provider.get_auth_headers(Headers({"authorization": "Bearer t"}))
+    assert headers == {"Authorization": "Bearer t"}
+
+
+@pytest.mark.asyncio
 async def test_provider_get_auth_headers_bearer():
     config = LlmProviderConfig(
         prefix="test",

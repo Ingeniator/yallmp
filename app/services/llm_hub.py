@@ -1,6 +1,7 @@
 import os
 import json
 import asyncio
+from collections.abc import Mapping
 from pathlib import Path
 
 from httpx import AsyncClient, Timeout, Limits
@@ -50,8 +51,18 @@ class LlmProvider:
         if self.client:
             await self.client.aclose()
 
-    async def get_auth_headers(self) -> dict[str, str]:
+    async def get_auth_headers(
+        self, request_headers: Mapping[str, str] | None = None
+    ) -> dict[str, str]:
         auth = self.config.auth
+        if auth.type == AuthType.PASSTHROUGH:
+            headers: dict[str, str] = {}
+            if request_headers:
+                for name in ("Authorization", "X-API-KEY"):
+                    value = request_headers.get(name)
+                    if value:
+                        headers[name] = value
+            return headers
         if auth.type == AuthType.BEARER and self.token_manager and self.client:
             token = await self.token_manager.get_token(self.client)
             return {"Authorization": f"Bearer {token}"}
