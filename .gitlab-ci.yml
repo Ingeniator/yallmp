@@ -57,6 +57,20 @@ deploy_to_dev_k8s:
         $CI_PIPELINE_SOURCE == "push" 
         && $CI_COMMIT_BRANCH == "main"
 
+deploy_to_prod_k8s:
+  stage: deploy
+  variables:
+    DEPLOY_TO: "cloud_prod/p-tagme-x"
+    COMPONENT: "$CI_PROJECT_NAME"
+    VERSION: "release"
+  trigger:
+    project: tagme/cd-pipeline
+    strategy: depend
+  rules:
+    - if: >
+        $CI_PIPELINE_SOURCE == "push" 
+        && $CI_COMMIT_BRANCH == "release"
+
 deploy_k8s:
   stage: deploy
   variables:
