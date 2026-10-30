@@ -1,9 +1,9 @@
 {
-    "lc": 1,
-    "type": "constructor",
-    "id": ["langchain", "chat_models", "openai", "ChatOpenAI"],
-    "kwargs": {
-        "openai_api_key": "{{env.LLM_PROXY_API_KEY}}",
-        "openai_api_base": "https://gigahf.dev.sberdevices.ru/v1"
-    }
+    "prefix": "gigahf",
+    "base_url": "https://gigahf.dev.sberdevices.ru",
+    "auth": {
+        "type": "BEARER",
+        "api_key": "${LLM_PROXY_API_KEY_GIGAHF}"
+    },
+    "models": []
 }
