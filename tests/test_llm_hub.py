@@ -116,8 +116,9 @@ def test_resolve_model_multi_slash(hub):
     assert model == "deep/model"
 
 
-def test_get_merged_models(hub):
-    result = hub.get_merged_models()
+@pytest.mark.asyncio
+async def test_get_merged_models(hub):
+    result = await hub.get_merged_models()
     assert result["object"] == "list"
     ids = [m["id"] for m in result["data"]]
     assert "alpha/model-a" in ids
@@ -128,9 +129,158 @@ def test_get_merged_models(hub):
         assert "owned_by" in m
 
 
-def test_get_merged_models_empty():
+@pytest.mark.asyncio
+async def test_get_merged_models_empty():
     h = LlmHub()
-    result = h.get_merged_models()
+    result = await h.get_merged_models()
+    assert result == {"object": "list", "data": []}
+
+
+def _models_response(entries, status=200):
+    resp = MagicMock()
+    resp.status_code = status
+    resp.json.return_value = {"object": "list", "data": entries}
+    if status >= 400:
+        resp.raise_for_status.side_effect = Exception(f"HTTP {status}")
+    else:
+        resp.raise_for_status.return_value = None
+    return resp
+
+
+def _dynamic_hub(client):
+    h = LlmHub()
+    provider = LlmProvider(
+        LlmProviderConfig(
+            prefix="dyn",
+            base_url="http://dyn/",
+            auth=AuthConfig(type=AuthType.APIKEY, api_key="k"),
+        )
+    )
+    provider.client = client
+    h.providers["dyn"] = provider
+    return h
+
+
+@pytest.mark.asyncio
+async def test_get_merged_models_dynamic_keeps_attributes():
+    client = MagicMock()
+    client.get = AsyncMock(
+        return_value=_models_response(
+            [{"id": "m1", "object": "model", "owned_by": "org", "context_length": 8192}]
+        )
+    )
+    h = _dynamic_hub(client)
+
+    result = await h.get_merged_models()
+
+    assert result["data"] == [
+        {"id": "dyn/m1", "object": "model", "owned_by": "org", "context_length": 8192}
+    ]
+    assert client.get.call_args.args[0] == "http://dyn/v1/models"
+    assert client.get.call_args.kwargs["headers"] == {"X-API-KEY": "k"}
+
+
+@pytest.mark.asyncio
+async def test_get_merged_models_dynamic_is_cached():
+    client = MagicMock()
+    client.get = AsyncMock(return_value=_models_response([{"id": "m1"}]))
+    h = _dynamic_hub(client)
+
+    await h.get_merged_models()
+    await h.get_merged_models()
+
+    assert client.get.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_get_merged_models_cache_expires(monkeypatch):
+    import app.services.llm_hub as llm_hub_module
+
+    client = MagicMock()
+    client.get = AsyncMock(return_value=_models_response([{"id": "m1"}]))
+    h = _dynamic_hub(client)
+
+    now = [1000.0]
+    monkeypatch.setattr(llm_hub_module.time, "monotonic", lambda: now[0])
+    await h.get_merged_models()
+    now[0] += llm_hub_module._MODELS_TTL + 1
+    await h.get_merged_models()
+
+    assert client.get.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_get_merged_models_provider_failure_serves_stale(monkeypatch):
+    import app.services.llm_hub as llm_hub_module
+
+    client = MagicMock()
+    client.get = AsyncMock(return_value=_models_response([{"id": "m1"}]))
+    h = _dynamic_hub(client)
+
+    now = [1000.0]
+    monkeypatch.setattr(llm_hub_module.time, "monotonic", lambda: now[0])
+    await h.get_merged_models()
+
+    now[0] += llm_hub_module._MODELS_TTL + 1
+    client.get = AsyncMock(side_effect=Exception("connect error"))
+    result = await h.get_merged_models()
+    assert [m["id"] for m in result["data"]] == ["dyn/m1"]
+
+    # Failed refresh is not retried until the retry window passes
+    await h.get_merged_models()
+    assert client.get.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_get_merged_models_provider_unreachable_returns_rest(hub):
+    client = MagicMock()
+    client.get = AsyncMock(side_effect=Exception("connect error"))
+    hub.providers["dyn"] = _dynamic_hub(client).providers["dyn"]
+
+    result = await hub.get_merged_models()
+
+    ids = [m["id"] for m in result["data"]]
+    assert "alpha/model-a" in ids
+    assert not any(i.startswith("dyn/") for i in ids)
+
+
+@pytest.mark.asyncio
+async def test_get_merged_models_merges_legacy(hub, monkeypatch):
+    import app.services.llm_hub as llm_hub_module
+
+    monkeypatch.setattr(llm_hub_module.settings, "proxy_target_url", "http://legacy")
+    legacy = MagicMock()
+    legacy.get = AsyncMock(
+        return_value=_models_response(
+            [
+                {"id": "anthropic/opus-5", "object": "model", "created": 123},
+                {"id": "alpha/model-a", "object": "model"},
+            ]
+        )
+    )
+
+    result = await hub.get_merged_models(
+        legacy_client=legacy, legacy_headers={"X-Custom": "1"}
+    )
+
+    ids = [m["id"] for m in result["data"]]
+    assert "anthropic/opus-5" in ids
+    assert ids.count("alpha/model-a") == 1
+    legacy_entry = next(m for m in result["data"] if m["id"] == "anthropic/opus-5")
+    assert legacy_entry["created"] == 123
+    assert legacy.get.call_args.args[0] == "http://legacy/v1/models"
+    assert legacy.get.call_args.kwargs["headers"] == {"X-Custom": "1"}
+
+
+@pytest.mark.asyncio
+async def test_get_merged_models_skips_provider_without_client():
+    h = LlmHub()
+    h.providers["dyn"] = LlmProvider(
+        LlmProviderConfig(
+            prefix="dyn", base_url="http://dyn", auth=AuthConfig(type=AuthType.NONE)
+        )
+    )
+    result = await h.get_merged_models()
     assert result == {"object": "list", "data": []}
 
 
@@ -158,34 +308,65 @@ async def test_provider_get_auth_headers_none():
     assert headers == {}
 
 
+def _passthrough_provider(headers=None):
+    return LlmProvider(
+        LlmProviderConfig(
+            prefix="test",
+            base_url="http://test",
+            auth=AuthConfig(type=AuthType.PASSTHROUGH, headers=headers),
+        )
+    )
+
+
 @pytest.mark.asyncio
-async def test_provider_get_auth_headers_passthrough():
-    config = LlmProviderConfig(
-        prefix="test",
-        base_url="http://test",
-        auth=AuthConfig(type=AuthType.PASSTHROUGH),
-    )
-    provider = LlmProvider(config)
+async def test_provider_get_auth_headers_passthrough_default():
+    provider = _passthrough_provider()
     headers = await provider.get_auth_headers(
-        {"Authorization": "Bearer client-tok", "X-API-KEY": "client-key", "Cookie": "c"}
+        {"Authorization": "Bearer gateway-tok", "X-API-KEY": "llm-key", "Cookie": "c"}
     )
-    assert headers == {"Authorization": "Bearer client-tok", "X-API-KEY": "client-key"}
+    # The client's Authorization (gateway token) must never be forwarded
+    assert headers == {"X-API-KEY": "llm-key"}
     assert await provider.get_auth_headers({}) == {}
     assert await provider.get_auth_headers() == {}
 
 
 @pytest.mark.asyncio
-async def test_provider_get_auth_headers_passthrough_case_insensitive():
+async def test_provider_get_auth_headers_passthrough_template():
     from starlette.datastructures import Headers
 
-    config = LlmProviderConfig(
-        prefix="test",
-        base_url="http://test",
-        auth=AuthConfig(type=AuthType.PASSTHROUGH),
+    provider = _passthrough_provider({"Authorization": "Bearer ${headers.X-API-KEY}"})
+    request_headers = Headers(
+        {"authorization": "Bearer gateway-tok", "x-api-key": "llm-key"}
     )
-    provider = LlmProvider(config)
-    headers = await provider.get_auth_headers(Headers({"authorization": "Bearer t"}))
-    assert headers == {"Authorization": "Bearer t"}
+    headers = await provider.get_auth_headers(request_headers)
+    assert headers == {"Authorization": "Bearer llm-key"}
+
+
+@pytest.mark.asyncio
+async def test_provider_get_auth_headers_passthrough_missing_source_header():
+    provider = _passthrough_provider(
+        {"Authorization": "Bearer ${headers.X-API-KEY}", "X-Static": "fixed"}
+    )
+    headers = await provider.get_auth_headers({"Authorization": "Bearer gateway-tok"})
+    assert headers == {"X-Static": "fixed"}
+
+
+def test_load_passthrough_provider_from_json(tmp_path):
+    cfg = {
+        "prefix": "pt",
+        "base_url": "http://pt",
+        "auth": {
+            "type": "PASSTHROUGH",
+            "headers": {"Authorization": "Bearer ${headers.X-API-KEY}"},
+        },
+        "models": [],
+    }
+    (tmp_path / "pt.json").write_text(json.dumps(cfg))
+    hub = LlmHub()
+    hub.load_providers(str(tmp_path))
+    auth = hub.providers["pt"].config.auth
+    assert auth.type == AuthType.PASSTHROUGH
+    assert auth.headers == {"Authorization": "Bearer ${headers.X-API-KEY}"}
 
 
 @pytest.mark.asyncio

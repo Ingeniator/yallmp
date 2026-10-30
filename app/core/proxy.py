@@ -22,6 +22,7 @@ import fnmatch
 import re
 from typing import AsyncIterator
 from app.core.security import redact_headers
+from app.schemas.provider import AuthType
 from app.services.pricing import PricingCache
 from app.services.tracing import trace_proxy_request
 
@@ -388,15 +389,22 @@ async def get_model_version(
 
 
 def _prepare_proxy_headers(
-    request: Request, auth_headers: dict[str, str]
+    request: Request,
+    auth_headers: dict[str, str],
+    drop_headers: set[str] | frozenset[str] = frozenset(),
 ) -> dict[str, str]:
-    """Build forwarded headers: filter excluded patterns, apply auth, force identity encoding."""
+    """Build forwarded headers: filter excluded patterns, apply auth, force identity encoding.
+
+    *drop_headers* (lower-case names) are removed from the client headers before
+    auth is applied, e.g. PASSTHROUGH source headers already copied into auth_headers.
+    """
     headers = dict(request.headers)
     logger.debug(f"original headers {redact_headers(headers)}")
     headers = {
         k: v
         for k, v in headers.items()
-        if not any(fnmatch.fnmatch(k.lower(), p) for p in _EXCLUDE_HEADER_PATTERNS)
+        if k.lower() not in drop_headers
+        and not any(fnmatch.fnmatch(k.lower(), p) for p in _EXCLUDE_HEADER_PATTERNS)
     }
     logger.debug(f"cleaned headers {redact_headers(headers)}")
     headers.update(auth_headers)
@@ -1107,6 +1115,13 @@ def _strip_model_prefix(body: bytes, original_model: str, stripped_model: str) -
     return body
 
 
+def _passthrough_drop(config) -> frozenset[str]:
+    """Client headers to strip for PASSTHROUGH providers: the ones copied into auth."""
+    if config.auth.type != AuthType.PASSTHROUGH:
+        return frozenset()
+    return frozenset(config.auth.passthrough_source_headers())
+
+
 async def proxy_request_to_provider(
     provider,
     path: str,
@@ -1123,7 +1138,7 @@ async def proxy_request_to_provider(
     if request.url.query:
         target_url = f"{target_url}?{request.url.query}"
 
-    headers = _prepare_proxy_headers(request, auth_headers)
+    headers = _prepare_proxy_headers(request, auth_headers, _passthrough_drop(config))
 
     try:
         body = await request.body()

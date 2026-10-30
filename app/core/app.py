@@ -587,7 +587,13 @@ def create_app() -> FastAPI:
         ):
             llm_hub = app.state.llm_hub
             if llm_hub and llm_hub.providers:
-                return JSONResponse(content=llm_hub.get_merged_models())
+                return JSONResponse(
+                    content=await llm_hub.get_merged_models(
+                        legacy_client=app.state.client,
+                        legacy_headers=custom_headers,
+                        request_headers=request.headers,
+                    )
+                )
             # Fallback: proxy to upstream
             return await proxy_request_with_retries(
                 app.state.client, "v1/models", request, custom_headers

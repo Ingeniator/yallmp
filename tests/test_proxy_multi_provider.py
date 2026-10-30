@@ -17,7 +17,7 @@ def _make_request(method="POST", path="/llm/v1/chat/completions", body=b"", head
     ]
     if headers:
         for k, v in headers.items():
-            raw_headers.append((k.encode(), v.encode()))
+            raw_headers.append((k.lower().encode(), v.encode()))
     scope = {
         "type": "http",
         "method": method,
@@ -190,6 +190,79 @@ async def test_provider_routing_uses_provider_base_url():
         )
 
     assert captured_url["url"].startswith("http://custom.api/")
+
+
+@pytest.mark.asyncio
+async def test_passthrough_provider_drops_source_header_and_gateway_token():
+    provider = FakeProvider()
+    provider.config.auth = AuthConfig(
+        type=AuthType.PASSTHROUGH,
+        headers={"Authorization": "Bearer ${headers.X-API-KEY}"},
+    )
+    captured = {}
+
+    async def capture_request(method, url, headers=None, content=None):
+        captured["headers"] = headers
+        return HTTPXResponse(
+            status_code=200, json={"choices": []}, request=HTTPXRequest("POST", url)
+        )
+
+    provider.client.request = capture_request
+
+    body = json.dumps({"model": "test/m", "messages": [], "stream": False}).encode()
+    request = _make_request(
+        body=body,
+        headers={
+            "Authorization": "Bearer gateway-tok",
+            "X-API-KEY": "llm-key",
+            "X-Group-Id": "g1",
+        },
+    )
+    auth_headers = await LlmProvider(provider.config).get_auth_headers(request.headers)
+
+    await proxy_request_to_provider(
+        provider=provider,
+        path="v1/chat/completions",
+        request=request,
+        auth_headers=auth_headers,
+        original_model="test/m",
+        stripped_model="m",
+    )
+
+    sent = {k.lower(): v for k, v in captured["headers"].items()}
+    assert sent["authorization"] == "Bearer llm-key"
+    assert "x-api-key" not in sent
+    assert "gateway-tok" not in " ".join(captured["headers"].values())
+    assert sent["x-group-id"] == "g1"
+
+
+@pytest.mark.asyncio
+async def test_non_passthrough_provider_keeps_client_x_api_key():
+    provider = FakeProvider()
+    captured = {}
+
+    async def capture_request(method, url, headers=None, content=None):
+        captured["headers"] = headers
+        return HTTPXResponse(
+            status_code=200, json={"choices": []}, request=HTTPXRequest("POST", url)
+        )
+
+    provider.client.request = capture_request
+
+    body = json.dumps({"model": "test/m", "messages": [], "stream": False}).encode()
+    request = _make_request(body=body, headers={"X-API-KEY": "client-key"})
+
+    await proxy_request_to_provider(
+        provider=provider,
+        path="v1/chat/completions",
+        request=request,
+        auth_headers={},
+        original_model="test/m",
+        stripped_model="m",
+    )
+
+    sent = {k.lower(): v for k, v in captured["headers"].items()}
+    assert sent["x-api-key"] == "client-key"
 
 
 @pytest.mark.asyncio

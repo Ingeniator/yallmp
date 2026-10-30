@@ -1,5 +1,7 @@
 import os
 import json
+import re
+import time
 import asyncio
 from collections.abc import Mapping
 from pathlib import Path
@@ -9,10 +11,58 @@ from httpx import AsyncClient, Timeout, Limits
 from app.core.config import settings
 from app.core.logging_config import setup_logging
 from app.core.proxy import CircuitBreaker
-from app.schemas.provider import LlmProviderConfig, AliasEntry, AuthType
+from app.schemas.provider import (
+    LlmProviderConfig,
+    AliasEntry,
+    AuthType,
+    HEADER_PLACEHOLDER,
+)
 from app.services.token_manager import OIDCTokenManager
 
 logger = setup_logging()
+
+_MODELS_TTL = 3600  # seconds a fetched model list is cached
+_MODELS_RETRY_AFTER = 60  # seconds before retrying a failed model list fetch
+_MODELS_FETCH_TIMEOUT = 10  # seconds; independent of the provider's completion timeouts
+_LEGACY_MODELS_KEY = "__legacy__"
+
+
+async def _fetch_model_list(
+    client: AsyncClient, url: str, headers: Mapping[str, str]
+) -> list[dict]:
+    """GET an OpenAI-style model list and return its ``data`` entries."""
+    resp = await client.get(url, headers=dict(headers), timeout=_MODELS_FETCH_TIMEOUT)
+    resp.raise_for_status()
+    body = resp.json()
+    entries = body.get("data") if isinstance(body, dict) else None
+    if not isinstance(entries, list):
+        raise ValueError("response has no 'data' list")
+    return [e for e in entries if isinstance(e, dict) and isinstance(e.get("id"), str)]
+
+
+def render_passthrough_headers(
+    templates: dict[str, str], request_headers: Mapping[str, str]
+) -> dict[str, str]:
+    """Build upstream headers from templates like "Bearer ${headers.X-API-KEY}".
+
+    A header is omitted if any placeholder it references is absent from the request.
+    """
+    result: dict[str, str] = {}
+    for name, template in templates.items():
+        missing = False
+
+        def _sub(m: re.Match) -> str:
+            nonlocal missing
+            value = request_headers.get(m.group(1))
+            if not value:
+                missing = True
+                return ""
+            return value
+
+        rendered = HEADER_PLACEHOLDER.sub(_sub, template)
+        if not missing:
+            result[name] = rendered
+    return result
 
 
 class LlmProvider:
@@ -56,13 +106,9 @@ class LlmProvider:
     ) -> dict[str, str]:
         auth = self.config.auth
         if auth.type == AuthType.PASSTHROUGH:
-            headers: dict[str, str] = {}
-            if request_headers:
-                for name in ("Authorization", "X-API-KEY"):
-                    value = request_headers.get(name)
-                    if value:
-                        headers[name] = value
-            return headers
+            return render_passthrough_headers(
+                auth.passthrough_templates(), request_headers or {}
+            )
         if auth.type == AuthType.BEARER and self.token_manager and self.client:
             token = await self.token_manager.get_token(self.client)
             return {"Authorization": f"Bearer {token}"}
@@ -77,6 +123,9 @@ class LlmHub:
     def __init__(self):
         self.providers: dict[str, LlmProvider] = {}
         self.aliases: dict[str, AliasEntry] = {}
+        # key -> (expires_at monotonic, entries)
+        self._models_cache: dict[str, tuple[float, list[dict]]] = {}
+        self._models_locks: dict[str, asyncio.Lock] = {}
 
     def load_providers(self, directory: str | None = None):
         directory = directory or settings.llm_hub_directory
@@ -166,17 +215,103 @@ class LlmHub:
             return None
         return provider, model
 
-    def get_merged_models(self) -> dict:
-        """Return an OpenAI-compatible model list merged from all providers."""
-        data = []
+    async def get_merged_models(
+        self,
+        legacy_client: AsyncClient | None = None,
+        legacy_headers: Mapping[str, str] | None = None,
+        request_headers: Mapping[str, str] | None = None,
+    ) -> dict:
+        """Return an OpenAI-compatible model list merged from all providers.
+
+        Providers with a configured ``models`` list contribute those entries.
+        Providers without one are queried at ``{base_url}/v1/models``; their
+        entries keep the original attributes with ``id`` prefixed.
+        If *legacy_client* is given, the legacy upstream's models are appended as is.
+        Remote lists are cached for ``_MODELS_TTL`` seconds.
+        """
+        data: list[dict] = []
+        tasks = []
         for prefix, provider in self.providers.items():
-            for model in provider.config.models:
-                data.append(
-                    {
-                        "id": f"{prefix}/{model}",
-                        "object": "model",
-                        "owned_by": prefix,
-                        "created": 0,
-                    }
+            if provider.config.models:
+                for model in provider.config.models:
+                    data.append(
+                        {
+                            "id": f"{prefix}/{model}",
+                            "object": "model",
+                            "owned_by": prefix,
+                            "created": 0,
+                        }
+                    )
+            elif provider.client is not None:
+                tasks.append(self._provider_models(prefix, provider, request_headers))
+
+        if legacy_client is not None:
+
+            async def legacy_fetch() -> list[dict]:
+                return await _fetch_model_list(
+                    legacy_client,
+                    f"{settings.proxy_target_url.rstrip('/')}/v1/models",
+                    legacy_headers or {},
                 )
+
+            tasks.append(self._cached_models(_LEGACY_MODELS_KEY, legacy_fetch))
+
+        seen = {m["id"] for m in data}
+        for entries in await asyncio.gather(*tasks):
+            for entry in entries:
+                if entry["id"] not in seen:
+                    seen.add(entry["id"])
+                    data.append(entry)
         return {"object": "list", "data": data}
+
+    async def _provider_models(
+        self,
+        prefix: str,
+        provider: LlmProvider,
+        request_headers: Mapping[str, str] | None,
+    ) -> list[dict]:
+        async def fetch() -> list[dict]:
+            headers = await provider.get_auth_headers(request_headers)
+            return await _fetch_model_list(
+                provider.client,
+                f"{provider.config.base_url.rstrip('/')}/v1/models",
+                headers,
+            )
+
+        entries = await self._cached_models(prefix, fetch)
+        return [{**e, "id": f"{prefix}/{e['id']}"} for e in entries]
+
+    async def _cached_models(self, key: str, fetch) -> list[dict]:
+        """Return cached entries for *key*, refreshing via *fetch* when expired.
+
+        While a refresh is running, other callers get the stale entries instead of
+        waiting. On failure the previous entries (or []) are kept and the refresh
+        is retried after ``_MODELS_RETRY_AFTER`` seconds.
+        """
+        cached = self._models_cache.get(key)
+        if cached and cached[0] > time.monotonic():
+            return cached[1]
+
+        lock = self._models_locks.setdefault(key, asyncio.Lock())
+        if cached and lock.locked():
+            return cached[1]
+
+        async with lock:
+            cached = self._models_cache.get(key)
+            if cached and cached[0] > time.monotonic():
+                return cached[1]
+            try:
+                entries = await fetch()
+                self._models_cache[key] = (time.monotonic() + _MODELS_TTL, entries)
+                logger.info(f"Fetched {len(entries)} models from '{key}'")
+            except Exception as e:
+                entries = cached[1] if cached else []
+                self._models_cache[key] = (
+                    time.monotonic() + _MODELS_RETRY_AFTER,
+                    entries,
+                )
+                logger.warning(
+                    f"Failed to fetch models from '{key}': {type(e).__name__}: {e}; "
+                    f"serving {len(entries)} cached entries"
+                )
+            return entries
