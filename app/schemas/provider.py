@@ -7,8 +7,13 @@ DEFAULT_PASSTHROUGH_HEADERS = {"X-API-KEY": "${headers.X-API-KEY}"}
 
 
 class AuthType(str, Enum):
+    # Static token: "Authorization: Bearer <api_key>"
     BEARER = "BEARER"
+    # Token fetched from oidc_url with credentials/scope: "Authorization: Bearer <token>"
+    OIDC = "OIDC"
+    # Static key: "X-API-KEY: <api_key>"
     APIKEY = "APIKEY"
+    # Mutual TLS client certificate (cert_path, cert_key_path)
     CERT = "CERT"
     NONE = "NONE"
     # Build provider auth headers from the client's request headers (see AuthConfig.headers)
@@ -17,10 +22,13 @@ class AuthType(str, Enum):
 
 class AuthConfig(BaseModel):
     type: AuthType = AuthType.NONE
+    # OIDC only
     oidc_url: str | None = None
     credentials: str | None = None
     scope: str | None = None
+    # BEARER and APIKEY
     api_key: str | None = None
+    # CERT only
     cert_path: str | None = None
     cert_key_path: str | None = None
     # PASSTHROUGH only: upstream header -> template, e.g.
@@ -73,3 +81,12 @@ class LlmProviderConfig(BaseModel):
     currency: str = "USD"
     pricing_endpoint: str | None = None
     pricing: dict[str, PricingInfo] | None = None
+    # X-Group-Id values allowed to use this provider. An entry matches the exact
+    # group_id and its nested ids ("org" matches "org" and "org/user").
+    # None or empty: open to everyone.
+    allow_list: list[str] | None = None
+
+    def is_group_allowed(self, group_id: str) -> bool:
+        if not self.allow_list:
+            return True
+        return any(group_id == g or group_id.startswith(f"{g}/") for g in self.allow_list)

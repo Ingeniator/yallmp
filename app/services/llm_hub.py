@@ -1,5 +1,6 @@
 import os
 import json
+import hashlib
 import re
 import time
 import asyncio
@@ -11,6 +12,7 @@ from httpx import AsyncClient, Timeout, Limits
 from app.core.config import settings
 from app.core.logging_config import setup_logging
 from app.core.proxy import CircuitBreaker
+from app.core.security import sanitize_group_id
 from app.schemas.provider import (
     LlmProviderConfig,
     AliasEntry,
@@ -90,7 +92,7 @@ class LlmProvider:
             verify=self.config.verify_ssl,
         )
 
-        if self.config.auth.type == AuthType.BEARER:
+        if self.config.auth.type == AuthType.OIDC:
             self.token_manager = OIDCTokenManager(
                 authorization_url=self.config.auth.oidc_url,
                 credentials=self.config.auth.credentials,
@@ -109,9 +111,11 @@ class LlmProvider:
             return render_passthrough_headers(
                 auth.passthrough_templates(), request_headers or {}
             )
-        if auth.type == AuthType.BEARER and self.token_manager and self.client:
+        if auth.type == AuthType.OIDC and self.token_manager and self.client:
             token = await self.token_manager.get_token(self.client)
             return {"Authorization": f"Bearer {token}"}
+        if auth.type == AuthType.BEARER and auth.api_key:
+            return {"Authorization": f"Bearer {auth.api_key}"}
         if auth.type == AuthType.APIKEY and auth.api_key:
             return {"X-API-KEY": auth.api_key}
         return {}
@@ -231,7 +235,10 @@ class LlmHub:
         """
         data: list[dict] = []
         tasks = []
+        group_id = sanitize_group_id((request_headers or {}).get("x-group-id"))
         for prefix, provider in self.providers.items():
+            if not provider.config.is_group_allowed(group_id):
+                continue
             if provider.config.models:
                 for model in provider.config.models:
                     data.append(
@@ -270,15 +277,32 @@ class LlmHub:
         provider: LlmProvider,
         request_headers: Mapping[str, str] | None,
     ) -> list[dict]:
+        key = prefix
+        auth = provider.config.auth
+        passthrough_headers: dict[str, str] | None = None
+        if auth.type == AuthType.PASSTHROUGH:
+            # The list depends on the caller's credentials: skip callers that lack
+            # them and cache per credential so one caller's list never leaks to another.
+            passthrough_headers = await provider.get_auth_headers(request_headers)
+            if len(passthrough_headers) < len(auth.passthrough_templates()):
+                return []
+            digest = hashlib.sha256(
+                json.dumps(sorted(passthrough_headers.items())).encode()
+            ).hexdigest()[:16]
+            key = f"{prefix}#{digest}"
+
         async def fetch() -> list[dict]:
-            headers = await provider.get_auth_headers(request_headers)
+            if passthrough_headers is not None:
+                headers = passthrough_headers
+            else:
+                headers = await provider.get_auth_headers(request_headers)
             return await _fetch_model_list(
                 provider.client,
                 f"{provider.config.base_url.rstrip('/')}/v1/models",
                 headers,
             )
 
-        entries = await self._cached_models(prefix, fetch)
+        entries = await self._cached_models(key, fetch)
         return [{**e, "id": f"{prefix}/{e['id']}"} for e in entries]
 
     async def _cached_models(self, key: str, fetch) -> list[dict]:

@@ -130,6 +130,22 @@ async def test_get_merged_models(hub):
 
 
 @pytest.mark.asyncio
+async def test_get_merged_models_hides_providers_outside_allow_list(hub):
+    hub.providers["beta"].config.allow_list = ["team1"]
+
+    denied = await hub.get_merged_models(request_headers={"x-group-id": "team2"})
+    denied_ids = [m["id"] for m in denied["data"]]
+    assert "beta/model-x" not in denied_ids
+    assert "alpha/model-a" in denied_ids
+
+    allowed = await hub.get_merged_models(request_headers={"x-group-id": "team1/user"})
+    assert "beta/model-x" in [m["id"] for m in allowed["data"]]
+
+    anonymous = await hub.get_merged_models()
+    assert "beta/model-x" not in [m["id"] for m in anonymous["data"]]
+
+
+@pytest.mark.asyncio
 async def test_get_merged_models_empty():
     h = LlmHub()
     result = await h.get_merged_models()
@@ -369,12 +385,76 @@ def test_load_passthrough_provider_from_json(tmp_path):
     assert auth.headers == {"Authorization": "Bearer ${headers.X-API-KEY}"}
 
 
+def _passthrough_hub(client):
+    h = LlmHub()
+    provider = _passthrough_provider({"Authorization": "Bearer ${headers.X-API-KEY}"})
+    provider.client = client
+    h.providers["test"] = provider
+    return h
+
+
 @pytest.mark.asyncio
-async def test_provider_get_auth_headers_bearer():
+async def test_get_merged_models_passthrough_without_key_skips_fetch():
+    client = MagicMock()
+    client.get = AsyncMock(return_value=_models_response([{"id": "m1"}]))
+    h = _passthrough_hub(client)
+
+    result = await h.get_merged_models(request_headers={})
+
+    assert result["data"] == []
+    client.get.assert_not_awaited()
+    assert h._models_cache == {}
+
+
+@pytest.mark.asyncio
+async def test_get_merged_models_passthrough_cached_per_key():
+    lists = {
+        "Bearer key-a": [{"id": "a-model"}],
+        "Bearer key-b": [{"id": "b-model"}],
+    }
+    client = MagicMock()
+    client.get = AsyncMock(
+        side_effect=lambda url, headers, timeout: _models_response(
+            lists[headers["Authorization"]]
+        )
+    )
+    h = _passthrough_hub(client)
+
+    a1 = await h.get_merged_models(request_headers={"X-API-KEY": "key-a"})
+    b1 = await h.get_merged_models(request_headers={"X-API-KEY": "key-b"})
+    a2 = await h.get_merged_models(request_headers={"X-API-KEY": "key-a"})
+    none = await h.get_merged_models(request_headers={})
+
+    assert [m["id"] for m in a1["data"]] == ["test/a-model"]
+    assert [m["id"] for m in b1["data"]] == ["test/b-model"]
+    assert a2 == a1
+    assert none["data"] == []
+    assert client.get.await_count == 2
+    # Raw credentials never appear in cache keys
+    assert all("key-" not in k for k in h._models_cache)
+
+
+@pytest.mark.asyncio
+async def test_provider_get_auth_headers_bearer_static_key():
     config = LlmProviderConfig(
         prefix="test",
         base_url="http://test",
-        auth=AuthConfig(type=AuthType.BEARER, oidc_url="http://auth", credentials="cred", scope="S"),
+        auth=AuthConfig(type=AuthType.BEARER, api_key="static-key"),
+    )
+    provider = LlmProvider(config)
+    await provider.startup()
+    assert provider.token_manager is None
+    headers = await provider.get_auth_headers({"X-API-KEY": "client"})
+    assert headers == {"Authorization": "Bearer static-key"}
+    await provider.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_provider_get_auth_headers_oidc():
+    config = LlmProviderConfig(
+        prefix="test",
+        base_url="http://test",
+        auth=AuthConfig(type=AuthType.OIDC, oidc_url="http://auth", credentials="cred", scope="S"),
     )
     provider = LlmProvider(config)
     await provider.startup()

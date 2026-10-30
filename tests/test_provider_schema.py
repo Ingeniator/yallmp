@@ -4,6 +4,7 @@ from app.schemas.provider import AuthType, AuthConfig, TimeoutConfig, LlmProvide
 
 def test_auth_type_enum_values():
     assert AuthType.BEARER == "BEARER"
+    assert AuthType.OIDC == "OIDC"
     assert AuthType.APIKEY == "APIKEY"
     assert AuthType.CERT == "CERT"
     assert AuthType.NONE == "NONE"
@@ -18,9 +19,9 @@ def test_auth_config_defaults():
     assert auth.api_key is None
 
 
-def test_auth_config_bearer():
-    auth = AuthConfig(type=AuthType.BEARER, oidc_url="http://auth/token", credentials="abc", scope="SCOPE")
-    assert auth.type == AuthType.BEARER
+def test_auth_config_oidc():
+    auth = AuthConfig(type=AuthType.OIDC, oidc_url="http://auth/token", credentials="abc", scope="SCOPE")
+    assert auth.type == AuthType.OIDC
     assert auth.oidc_url == "http://auth/token"
     assert auth.scope == "SCOPE"
 
@@ -58,7 +59,7 @@ def test_provider_config_full():
         "prefix": "gigachat",
         "base_url": "https://gigachat.api/v1",
         "auth": {
-            "type": "BEARER",
+            "type": "OIDC",
             "oidc_url": "http://auth/token",
             "credentials": "creds",
             "scope": "GIGACHAT_API_CORP",
@@ -73,7 +74,7 @@ def test_provider_config_full():
     }
     config = LlmProviderConfig(**data)
     assert config.prefix == "gigachat"
-    assert config.auth.type == AuthType.BEARER
+    assert config.auth.type == AuthType.OIDC
     assert config.auth.scope == "GIGACHAT_API_CORP"
     assert len(config.models) == 2
     assert config.verify_ssl is False

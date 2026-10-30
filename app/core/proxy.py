@@ -21,7 +21,7 @@ import json
 import fnmatch
 import re
 from typing import AsyncIterator
-from app.core.security import redact_headers
+from app.core.security import redact_headers, sanitize_group_id
 from app.schemas.provider import AuthType
 from app.services.pricing import PricingCache
 from app.services.tracing import trace_proxy_request
@@ -1134,6 +1134,14 @@ async def proxy_request_to_provider(
     """Route a request to a specific LLM provider, stripping the model prefix."""
 
     config = provider.config
+    group_id = sanitize_group_id(request.headers.get("x-group-id"))
+    if not config.is_group_allowed(group_id):
+        logger.info("provider_access_denied", provider=config.prefix, group_id=group_id)
+        return JSONResponse(
+            status_code=403,
+            content={"error": f"group '{group_id}' is not allowed to use provider '{config.prefix}'"},
+        )
+
     target_url = f"{config.base_url}/{path}"
     if request.url.query:
         target_url = f"{target_url}?{request.url.query}"
