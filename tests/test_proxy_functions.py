@@ -65,7 +65,7 @@ async def test_get_circuit_status():
 @pytest.mark.asyncio
 async def test_create_async_client_default():
     with patch.object(proxy_mod, "settings") as s:
-        s.proxy_authorization_type = "BEARER"
+        s.proxy_authorization_type = "OIDC"
         s.proxy_connect_timeout = 10
         s.proxy_read_timeout = 300
         s.proxy_write_timeout = 30

@@ -1,3 +1,7 @@
+import warnings
+from typing import Literal
+
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 import os
 
@@ -67,15 +71,44 @@ class AppSettings(BaseSettings):
     proxy_target_url: str = (
         "http://localhost:8001"  # Target backend server to forward requests
     )
-    proxy_authorization_type: str = "BEARER"
-    # in case of proxy_authorization_type == "APIKEY"
+    # Same meanings as provider auth types (case-insensitive):
+    #   OIDC   - token fetched from proxy_oidc_authorization_url: "Authorization: Bearer <token>"
+    #   BEARER - static proxy_api_key: "Authorization: Bearer <proxy_api_key>"
+    #   APIKEY - static proxy_api_key: "X-API-KEY: <proxy_api_key>"
+    #   CERT   - mutual TLS with proxy_api_cert_path / proxy_api_cert_key_path
+    #   NONE   - no auth
+    proxy_authorization_type: Literal["OIDC", "BEARER", "APIKEY", "CERT", "NONE"] = "OIDC"
+    # in case of proxy_authorization_type == "APIKEY" or "BEARER"
     proxy_api_key: str | None = None
     # in case of proxy_authorization_type == "CERT"
     proxy_api_cert_path: str | None = None
     proxy_api_cert_key_path: str | None = None
-    # in case of proxy_authorization_type == "BEARER"
+    # in case of proxy_authorization_type == "OIDC"
     proxy_oidc_authorization_url: str | None = None
     proxy_oidc_credentials: str | None = None
+
+    @field_validator("proxy_authorization_type", mode="before")
+    @classmethod
+    def _normalize_proxy_authorization_type(cls, v):
+        return v.strip().upper() if isinstance(v, str) else v
+
+    @model_validator(mode="after")
+    def _migrate_legacy_bearer(self) -> "AppSettings":
+        # BEARER used to mean OIDC. Keep old deployments (OIDC URL set, no static
+        # key) working instead of silently sending requests without a token.
+        if (
+            self.proxy_authorization_type == "BEARER"
+            and not self.proxy_api_key
+            and self.proxy_oidc_authorization_url
+        ):
+            warnings.warn(
+                "proxy_authorization_type=BEARER with proxy_oidc_authorization_url "
+                "is deprecated: BEARER now means a static proxy_api_key; use OIDC",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            self.proxy_authorization_type = "OIDC"
+        return self
 
     proxy_pricing_config: str | None = (
         None  # Path to pricing JSON for legacy proxy mode

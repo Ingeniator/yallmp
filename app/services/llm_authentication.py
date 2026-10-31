@@ -6,7 +6,7 @@ from app.core.logging_config import setup_logging
 logger = setup_logging()
 
 token_manager = None
-if settings.proxy_authorization_type == "BEARER":
+if settings.proxy_authorization_type == "OIDC":
     token_manager = OIDCTokenManager(settings.proxy_oidc_authorization_url, settings.proxy_oidc_credentials)
 
 
@@ -15,6 +15,11 @@ async def get_authorization_headers(client: AsyncClient):
     if token_manager:
         token = await token_manager.get_token(client)
         custom_headers["Authorization"] = f"Bearer {token}"
+    elif settings.proxy_authorization_type == "BEARER":
+        if not settings.proxy_api_key:
+            logger.error("proxy_authorization_type is BEARER but proxy_api_key is not set")
+        else:
+            custom_headers["Authorization"] = f"Bearer {settings.proxy_api_key}"
     elif settings.proxy_authorization_type == "APIKEY":
         if not settings.proxy_api_key:
             logger.error("proxy_authorization_type is APIKEY but proxy_api_key is not set")

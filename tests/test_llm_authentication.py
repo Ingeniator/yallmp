@@ -3,13 +3,13 @@ from unittest.mock import AsyncMock, patch, MagicMock
 
 
 @pytest.mark.asyncio
-async def test_bearer_auth():
+async def test_oidc_auth():
     mock_tm = MagicMock()
     mock_tm.get_token = AsyncMock(return_value="test-token-123")
 
     with patch("app.services.llm_authentication.token_manager", mock_tm), \
          patch("app.services.llm_authentication.settings") as mock_settings:
-        mock_settings.proxy_authorization_type = "BEARER"
+        mock_settings.proxy_authorization_type = "OIDC"
         mock_settings.proxy_api_key = None
 
         from app.services.llm_authentication import get_authorization_headers
@@ -46,3 +46,16 @@ async def test_no_auth():
         headers = await get_authorization_headers(client)
 
     assert headers == {}
+
+
+@pytest.mark.asyncio
+async def test_bearer_static_key_auth():
+    with patch("app.services.llm_authentication.token_manager", None), \
+         patch("app.services.llm_authentication.settings") as mock_settings:
+        mock_settings.proxy_authorization_type = "BEARER"
+        mock_settings.proxy_api_key = "static-key"
+
+        from app.services.llm_authentication import get_authorization_headers
+        headers = await get_authorization_headers(AsyncMock())
+
+    assert headers == {"Authorization": "Bearer static-key"}
