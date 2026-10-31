@@ -564,6 +564,7 @@ def create_app() -> FastAPI:
             proxy_request_with_retries,
             get_model_version,
             proxy_request_to_provider,
+            check_provider_access,
         )
         from app.services.llm_authentication import get_authorization_headers
 
@@ -623,6 +624,13 @@ def create_app() -> FastAPI:
                         if primary:
                             p_provider, p_stripped = primary
                             p_headers = await p_provider.get_auth_headers(request.headers)
+                            # Access/credential errors are the caller's: don't reroute
+                            # them to the fallback provider.
+                            denied = check_provider_access(
+                                p_provider.config, request, p_headers
+                            )
+                            if denied is not None:
+                                return denied
                             response = await proxy_request_to_provider(
                                 provider=p_provider,
                                 path=full_path,

@@ -524,3 +524,41 @@ async def test_proxy_request_with_retries_no_override_uses_request_body():
         await proxy_request_with_retries(mock_client, "v1/chat/completions", request)
 
     assert captured_body["value"] == original_body
+
+
+@pytest.mark.asyncio
+async def test_passthrough_provider_missing_credentials_returns_401():
+    provider = FakeProvider()
+    provider.config.auth = AuthConfig(
+        type=AuthType.PASSTHROUGH,
+        headers={"Authorization": "Bearer ${headers.X-API-KEY}"},
+    )
+    body = json.dumps({"model": "test/m", "messages": []}).encode()
+    request = _make_request(body=body)
+
+    response = await proxy_request_to_provider(
+        provider=provider,
+        path="v1/chat/completions",
+        request=request,
+        auth_headers={},
+        original_model="test/m",
+        stripped_model="m",
+    )
+
+    assert response.status_code == 401
+    assert "x-api-key" in json.loads(response.body)["error"]
+    provider.client.request.assert_not_called()
+
+
+def test_check_provider_access_denies_group_outside_allow_list():
+    from app.core.proxy import check_provider_access
+
+    provider = FakeProvider()
+    provider.config.allow_list = ["acme"]
+    assert check_provider_access(
+        provider.config, _make_request(headers={"X-Group-Id": "acme/bob"}), {}
+    ) is None
+    denied = check_provider_access(
+        provider.config, _make_request(headers={"X-Group-Id": "other"}), {}
+    )
+    assert denied.status_code == 403

@@ -1122,6 +1122,36 @@ def _passthrough_drop(config) -> frozenset[str]:
     return frozenset(config.auth.passthrough_source_headers())
 
 
+def check_provider_access(
+    config, request: Request, auth_headers: dict[str, str]
+) -> JSONResponse | None:
+    """Return an error response if the caller may not use this provider, else None.
+
+    403 if the X-Group-Id is not in the provider's allow_list; 401 if a PASSTHROUGH
+    provider's auth headers could not be built from the request.
+    """
+    group_id = sanitize_group_id(request.headers.get("x-group-id"))
+    if not config.is_group_allowed(group_id):
+        logger.info("provider_access_denied", provider=config.prefix, group_id=group_id)
+        return JSONResponse(
+            status_code=403,
+            content={"error": f"group '{group_id}' is not allowed to use provider '{config.prefix}'"},
+        )
+    if config.auth.type == AuthType.PASSTHROUGH:
+        missing = sorted(set(config.auth.passthrough_templates()) - set(auth_headers))
+        if missing:
+            sources = sorted(config.auth.passthrough_source_headers())
+            logger.info("provider_credentials_missing", provider=config.prefix)
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "error": f"provider '{config.prefix}' requires request header(s): "
+                    f"{', '.join(sources)}"
+                },
+            )
+    return None
+
+
 async def proxy_request_to_provider(
     provider,
     path: str,
@@ -1134,13 +1164,9 @@ async def proxy_request_to_provider(
     """Route a request to a specific LLM provider, stripping the model prefix."""
 
     config = provider.config
-    group_id = sanitize_group_id(request.headers.get("x-group-id"))
-    if not config.is_group_allowed(group_id):
-        logger.info("provider_access_denied", provider=config.prefix, group_id=group_id)
-        return JSONResponse(
-            status_code=403,
-            content={"error": f"group '{group_id}' is not allowed to use provider '{config.prefix}'"},
-        )
+    denied = check_provider_access(config, request, auth_headers)
+    if denied is not None:
+        return denied
 
     target_url = f"{config.base_url}/{path}"
     if request.url.query:
