@@ -1,5 +1,5 @@
-{                                                                                                                                                                     
-    "prefix": "giganlp",                                                                                                                                              
+{
+    "prefix": "giganlp",
     "base_url": "http://d-giganlp-wmcore-adv-msk02.sberdevices.ru:8005",
     "auth": {
         "type": "PASSTHROUGH",
