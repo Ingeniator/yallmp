@@ -39,3 +39,18 @@ Built-in web UI at `/dashboard` showing cost/usage trends (Prometheus-backed), s
 
 ### K8s-native readiness probe
 `/ready` reports per-provider circuit breaker status with 503 on degradation, not just process liveness. LiteLLM's health checks are simpler.
+
+## Enterprise-only LiteLLM features that yallmp includes for free
+
+LiteLLM open-source lacks several governance features that only ship in its paid Enterprise tier. yallmp includes equivalents of these at no license cost:
+
+| Feature | yallmp | LiteLLM OSS | LiteLLM Enterprise |
+|---|---|---|---|
+| Org/team spend hierarchy + budgets | `BillingMiddleware` enforces per-org and per-user Redis-backed limits (`app/middlewares/billing_middleware.py`) via `x-group-id: org/user` | Per-key/user budgets only | Multi-tenant architecture, tag-based budgets, model-specific budgets per virtual key |
+| Role-scoped dashboard views | `app/services/dashboard.py` filters metrics by `group_id`/org-prefix based on `x-role` (`ORG_ADMIN`, super-admin) | Single global view | Role-based access control (orgs, teams, user roles) |
+| Team-scoped observability | Dashboard/Prometheus queries scoped to caller's group or org | Logging is global | Team-based logging, disable logging per team |
+| Spend reporting by group | Built into the same dashboard aggregation | Not in OSS | Generate spend reports |
+
+**Caveat**: yallmp's scoping is authorization-by-trusted-header, not authentication. `x-group-id`/`x-role` (see `app/core/security.py::sanitize_group_id`) are read straight off request headers with no signature or identity verification — something upstream (a gateway or auth proxy) is assumed to have authenticated the caller and set those headers correctly. LiteLLM Enterprise's RBAC comes with an actual SSO/SAML/JWT identity layer attached; yallmp gives you the segmentation and billing logic but not the identity verification, so that piece has to be supplied in front of it.
+
+Other Enterprise-only LiteLLM features yallmp doesn't attempt to replicate: SSO/SAML/SCIM, audit logs with retention, IP allowlisting, secret-manager integrations (Vault/KMS), per-team guardrail assignment, custom UI/email branding, multi-region/admin-worker split architecture.
