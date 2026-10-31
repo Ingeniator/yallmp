@@ -27,6 +27,9 @@ _MODELS_TTL = 3600  # seconds a fetched model list is cached
 _MODELS_RETRY_AFTER = 60  # seconds before retrying a failed model list fetch
 _MODELS_FETCH_TIMEOUT = 10  # seconds; independent of the provider's completion timeouts
 _LEGACY_MODELS_KEY = "__legacy__"
+# ${VAR} left over after os.path.expandvars, i.e. an unset environment variable.
+# ${headers.X} are PASSTHROUGH placeholders, resolved per request.
+_UNRESOLVED_ENV_VAR = re.compile(r"\$\{(?!headers\.)([^}]+)\}")
 
 
 async def _fetch_model_list(
@@ -149,6 +152,14 @@ class LlmHub:
                 # Skip files that don't have the new provider format (e.g. langchain configs)
                 if "prefix" not in data:
                     logger.debug(f"Skipping {json_file.name}: no 'prefix' field")
+                    continue
+
+                unresolved = sorted(set(_UNRESOLVED_ENV_VAR.findall(expanded)))
+                if unresolved:
+                    logger.error(
+                        f"Skipping {json_file.name}: environment variables not set: "
+                        f"{', '.join(unresolved)}"
+                    )
                     continue
 
                 config = LlmProviderConfig(**data)

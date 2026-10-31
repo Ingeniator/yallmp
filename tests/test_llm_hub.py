@@ -568,3 +568,29 @@ async def test_hub_startup_shutdown(provider_dir):
     for p in hub.providers.values():
         assert p.client is not None
     await hub.shutdown()
+
+
+def test_load_providers_skips_unset_env_var(tmp_path):
+    p = {
+        "prefix": "unset",
+        "base_url": "http://x",
+        "auth": {"type": "BEARER", "api_key": "${TEST_LLM_HUB_DEFINITELY_UNSET}"},
+    }
+    (tmp_path / "unset.json").write_text(json.dumps(p))
+    os.environ.pop("TEST_LLM_HUB_DEFINITELY_UNSET", None)
+    h = LlmHub()
+    h.load_providers(str(tmp_path))
+    assert "unset" not in h.providers
+
+
+def test_load_providers_keeps_passthrough_placeholders(tmp_path):
+    p = {
+        "prefix": "pt",
+        "base_url": "http://x",
+        "auth": {"type": "PASSTHROUGH", "headers": {"Authorization": "Bearer ${headers.X-API-KEY}"}},
+    }
+    (tmp_path / "pt.json").write_text(json.dumps(p))
+    h = LlmHub()
+    h.load_providers(str(tmp_path))
+    assert "pt" in h.providers
+
