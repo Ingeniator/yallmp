@@ -1,6 +1,6 @@
 import re
 from enum import Enum
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 HEADER_PLACEHOLDER = re.compile(r"\$\{headers\.([A-Za-z0-9_-]+)\}")
 DEFAULT_PASSTHROUGH_HEADERS = {"X-API-KEY": "${headers.X-API-KEY}"}
@@ -35,6 +35,21 @@ class AuthConfig(BaseModel):
     # {"Authorization": "Bearer ${headers.X-API-KEY}"}.
     # Default: {"X-API-KEY": "${headers.X-API-KEY}"}
     headers: dict[str, str] | None = None
+
+    @model_validator(mode="after")
+    def _check_required_fields(self) -> "AuthConfig":
+        if self.type == AuthType.BEARER and not self.api_key:
+            hint = (
+                "; for a token fetched from oidc_url use type OIDC"
+                if self.oidc_url
+                else ""
+            )
+            raise ValueError(f"auth type BEARER requires api_key{hint}")
+        if self.type == AuthType.OIDC and not self.oidc_url:
+            raise ValueError("auth type OIDC requires oidc_url")
+        if self.type == AuthType.APIKEY and not self.api_key:
+            raise ValueError("auth type APIKEY requires api_key")
+        return self
 
     def passthrough_templates(self) -> dict[str, str]:
         return self.headers or DEFAULT_PASSTHROUGH_HEADERS

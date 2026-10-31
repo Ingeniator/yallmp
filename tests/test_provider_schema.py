@@ -97,3 +97,23 @@ def test_provider_config_missing_required_fields():
 
     with pytest.raises(Exception):
         LlmProviderConfig(base_url="http://x")  # missing prefix
+
+
+def test_auth_config_bearer_requires_api_key():
+    with pytest.raises(ValueError, match="BEARER requires api_key"):
+        AuthConfig(type=AuthType.BEARER)
+
+
+def test_auth_config_bearer_with_oidc_url_hints_oidc():
+    with pytest.raises(ValueError, match="use type OIDC"):
+        AuthConfig(type=AuthType.BEARER, oidc_url="http://auth/token", credentials="c")
+
+
+def test_auth_config_oidc_requires_oidc_url():
+    with pytest.raises(ValueError, match="OIDC requires oidc_url"):
+        AuthConfig(type=AuthType.OIDC)
+
+
+def test_auth_config_apikey_requires_api_key():
+    with pytest.raises(ValueError, match="APIKEY requires api_key"):
+        AuthConfig(type=AuthType.APIKEY)
