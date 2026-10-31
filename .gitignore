@@ -25,3 +25,6 @@ image.png
 **/node_modules/*
 tests/load/report.html
 tests/load/attack.sh
+
+# macOS / local scratch
+.DS_Store
