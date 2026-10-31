@@ -64,7 +64,7 @@ def test_parse_pricing_response_malformed_entries():
 
 def test_get_cost_returns_correct_value():
     provider = _make_provider(prefix="test")
-    cache = PricingCache([provider])
+    cache = PricingCache({provider.config.prefix: provider})
     cache._cache["test"] = {
         "my-model": PricingInfo(input_cost_per_token=0.001, output_cost_per_token=0.002),
     }
@@ -77,13 +77,13 @@ def test_get_cost_returns_correct_value():
 
 
 def test_get_cost_unknown_provider():
-    cache = PricingCache([])
+    cache = PricingCache({})
     assert cache.get_cost("unknown", "model", 10, 10) is None
 
 
 def test_get_cost_unknown_model():
     provider = _make_provider(prefix="p")
-    cache = PricingCache([provider])
+    cache = PricingCache({provider.config.prefix: provider})
     cache._cache["p"] = {"other-model": PricingInfo(input_cost_per_token=0.1, output_cost_per_token=0.2)}
 
     assert cache.get_cost("p", "missing-model", 10, 10) is None
@@ -98,7 +98,7 @@ async def test_refresh_loads_static_pricing():
     static = {"m1": PricingInfo(input_cost_per_token=0.01, output_cost_per_token=0.02)}
     provider = _make_provider(prefix="static_prov", pricing=static, currency="RUB")
 
-    cache = PricingCache([provider])
+    cache = PricingCache({provider.config.prefix: provider})
     await cache._refresh()
 
     assert "static_prov" in cache._cache
@@ -127,7 +127,7 @@ async def test_refresh_fetches_dynamic_endpoint():
     mock_client.__aexit__ = AsyncMock(return_value=False)
 
     with patch("app.services.pricing.httpx.AsyncClient", return_value=mock_client):
-        cache = PricingCache([provider])
+        cache = PricingCache({provider.config.prefix: provider})
         await cache._refresh()
 
     assert "dyn" in cache._cache
@@ -146,7 +146,7 @@ async def test_refresh_falls_back_on_endpoint_failure():
     mock_client.__aexit__ = AsyncMock(return_value=False)
 
     with patch("app.services.pricing.httpx.AsyncClient", return_value=mock_client):
-        cache = PricingCache([provider])
+        cache = PricingCache({provider.config.prefix: provider})
         await cache._refresh()
 
     assert "fb" in cache._cache
@@ -160,7 +160,7 @@ async def test_refresh_falls_back_on_endpoint_failure():
 @pytest.mark.asyncio
 async def test_refresh_updates_last_refresh_time():
     provider = _make_provider()
-    cache = PricingCache([provider], ttl=60)
+    cache = PricingCache({provider.config.prefix: provider}, ttl=60)
 
     assert cache._last_refresh == 0
     await cache._refresh()

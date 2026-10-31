@@ -147,7 +147,7 @@ def _mock_settings(**overrides):
         proxy_pricing_config=None, proxy_pricing_endpoint=None,
         proxy_pricing_prefix=None, proxy_pricing_currency=None,
         search_hub_enabled=False, tracing_enabled=False, billing_enabled=False,
-        version="0.0.1-test",
+        debug_network_check=False, version="0.0.1-test",
     )
     defaults.update(overrides)
 

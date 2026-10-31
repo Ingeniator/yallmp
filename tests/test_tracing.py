@@ -116,6 +116,7 @@ class TestTraceProxyRequest:
             tools_defined=None,
             tool_calls=None,
             agent_name=None,
+            tags=None,
             completion_start_time=None,
             prompt_name=None,
             prompt_version=None,

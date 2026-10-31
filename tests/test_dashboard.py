@@ -133,6 +133,7 @@ def _mock_settings():
         proxy_pricing_config = None
         proxy_pricing_endpoint = None
         dashboard_dev_role_switcher = False
+        debug_network_check = False
         version = "0.0.1-test"
     return S()
 
