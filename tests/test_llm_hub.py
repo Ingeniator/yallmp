@@ -594,3 +594,24 @@ def test_load_providers_keeps_passthrough_placeholders(tmp_path):
     h.load_providers(str(tmp_path))
     assert "pt" in h.providers
 
+
+@pytest.mark.asyncio
+async def test_models_cache_prunes_long_expired_entries(monkeypatch):
+    import app.services.llm_hub as llm_hub_module
+
+    h = LlmHub()
+    now = [1000.0]
+    monkeypatch.setattr(llm_hub_module.time, "monotonic", lambda: now[0])
+    fetch = AsyncMock(return_value=[{"id": "m"}])
+    await h._cached_models("p#old", fetch)
+    assert "p#old" in h._models_cache
+
+    # Recently expired: kept as stale fallback
+    now[0] += llm_hub_module._MODELS_TTL + 1
+    await h.get_merged_models()
+    assert "p#old" in h._models_cache
+
+    now[0] += llm_hub_module._MODELS_PRUNE_AFTER
+    await h.get_merged_models()
+    assert "p#old" not in h._models_cache
+    assert "p#old" not in h._models_locks

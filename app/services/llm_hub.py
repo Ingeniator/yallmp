@@ -26,6 +26,7 @@ logger = setup_logging()
 _MODELS_TTL = 3600  # seconds a fetched model list is cached
 _MODELS_RETRY_AFTER = 60  # seconds before retrying a failed model list fetch
 _MODELS_FETCH_TIMEOUT = 10  # seconds; independent of the provider's completion timeouts
+_MODELS_PRUNE_AFTER = _MODELS_TTL  # seconds past expiry before an entry is dropped
 _LEGACY_MODELS_KEY = "__legacy__"
 # ${VAR} left over after os.path.expandvars, i.e. an unset environment variable.
 # ${headers.X} are PASSTHROUGH placeholders, resolved per request.
@@ -244,6 +245,7 @@ class LlmHub:
         If *legacy_client* is given, the legacy upstream's models are appended as is.
         Remote lists are cached for ``_MODELS_TTL`` seconds.
         """
+        self._prune_models_cache()
         data: list[dict] = []
         tasks = []
         group_id = sanitize_group_id((request_headers or {}).get("x-group-id"))
@@ -315,6 +317,20 @@ class LlmHub:
 
         entries = await self._cached_models(key, fetch)
         return [{**e, "id": f"{prefix}/{e['id']}"} for e in entries]
+
+    def _prune_models_cache(self) -> None:
+        """Drop entries expired for over ``_MODELS_PRUNE_AFTER`` seconds.
+
+        Keeps the cache from growing without bound with per-credential PASSTHROUGH
+        keys. Recently expired entries stay as the stale fallback for a failed refresh.
+        """
+        cutoff = time.monotonic() - _MODELS_PRUNE_AFTER
+        for key in [k for k, (exp, _) in self._models_cache.items() if exp < cutoff]:
+            lock = self._models_locks.get(key)
+            if lock is not None and lock.locked():
+                continue
+            del self._models_cache[key]
+            self._models_locks.pop(key, None)
 
     async def _cached_models(self, key: str, fetch) -> list[dict]:
         """Return cached entries for *key*, refreshing via *fetch* when expired.
