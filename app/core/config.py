@@ -1,7 +1,6 @@
 import warnings
-from typing import Literal
 
-from pydantic import field_validator, model_validator
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 import os
 
@@ -13,10 +12,6 @@ class AppSettings(BaseSettings):
     debug: bool = False
     workers: int = 1
     timeout_keep_alive: int = 600
-    proxy_connect_timeout: int = 10
-    proxy_read_timeout: int = 300
-    proxy_write_timeout: int = 30
-    proxy_pool_timeout: int | None = None
     max_connections: int = 100  # Maximum simultaneous connections
     max_keepalive_connections: int = 20  # Keepalive connections
     host: str = "0.0.0.0"
@@ -28,10 +23,10 @@ class AppSettings(BaseSettings):
     fake_llm_port: int = 5001
 
     # Feature toggles
-    proxy_enabled: bool = False
+    proxy_enabled: bool = False  # /llm routes, served by the LLM hub providers
     prompt_hub_enabled: bool = False
     chain_hub_enabled: bool = False
-    llm_hub_enabled: bool = False
+    llm_hub_enabled: bool = False  # deprecated alias of proxy_enabled
     dashboard_enabled: bool = False
     dashboard_metrics_backend: str = "local"  # "local" or "prometheus"
     dashboard_prometheus_url: str = ""  # e.g. "http://prometheus:9090"
@@ -66,60 +61,18 @@ class AppSettings(BaseSettings):
     proxy_exclude_headers: str = (
         "host,authorization,cookie,x-forwarded-*,jwt-*,content-length"
     )
-    proxy_verify_ssl: bool = True
-    proxy_ca_bundle_path: str | None = None
-    proxy_target_url: str = (
-        "http://localhost:8001"  # Target backend server to forward requests
-    )
-    # Same meanings as provider auth types (case-insensitive):
-    #   OIDC   - token fetched from proxy_oidc_authorization_url: "Authorization: Bearer <token>"
-    #   BEARER - static proxy_api_key: "Authorization: Bearer <proxy_api_key>"
-    #   APIKEY - static proxy_api_key: "X-API-KEY: <proxy_api_key>"
-    #   CERT   - mutual TLS with proxy_api_cert_path / proxy_api_cert_key_path
-    #   NONE   - no auth
-    proxy_authorization_type: Literal["OIDC", "BEARER", "APIKEY", "CERT", "NONE"] = "OIDC"
-    # in case of proxy_authorization_type == "APIKEY" or "BEARER"
-    proxy_api_key: str | None = None
-    # in case of proxy_authorization_type == "CERT"
-    proxy_api_cert_path: str | None = None
-    proxy_api_cert_key_path: str | None = None
-    # in case of proxy_authorization_type == "OIDC"
-    proxy_oidc_authorization_url: str | None = None
-    proxy_oidc_credentials: str | None = None
-
-    @field_validator("proxy_authorization_type", mode="before")
-    @classmethod
-    def _normalize_proxy_authorization_type(cls, v):
-        return v.strip().upper() if isinstance(v, str) else v
 
     @model_validator(mode="after")
-    def _migrate_legacy_bearer(self) -> "AppSettings":
-        # BEARER used to mean OIDC. Keep old deployments (OIDC URL set, no static
-        # key) working instead of silently sending requests without a token.
-        if (
-            self.proxy_authorization_type == "BEARER"
-            and not self.proxy_api_key
-            and self.proxy_oidc_authorization_url
-        ):
+    def _merge_llm_hub_flag(self) -> "AppSettings":
+        # The hub is the only /llm backend now, so the two flags mean the same thing.
+        if self.llm_hub_enabled:
             warnings.warn(
-                "proxy_authorization_type=BEARER with proxy_oidc_authorization_url "
-                "is deprecated: BEARER now means a static proxy_api_key; use OIDC",
+                "llm_hub_enabled is deprecated: use proxy_enabled",
                 DeprecationWarning,
                 stacklevel=2,
             )
-            self.proxy_authorization_type = "OIDC"
+            self.proxy_enabled = True
         return self
-
-    proxy_pricing_config: str | None = (
-        None  # Path to pricing JSON for legacy proxy mode
-    )
-    proxy_pricing_endpoint: str | None = (
-        None  # URL to fetch pricing dynamically (e.g. https://openrouter.ai/api/v1/models_info)
-    )
-    proxy_pricing_prefix: str = (
-        "proxy"  # Provider prefix used when fetching from endpoint
-    )
-    proxy_pricing_currency: str = "USD"  # Currency when fetching from endpoint
 
     proxy_max_retries: int = 5  # Number of retries before circuit breaker
     proxy_base_delay: float = 0.5  # Base delay in seconds
@@ -175,6 +128,38 @@ class AppSettings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="LLM_", env_file=".env", env_file_encoding="utf-8", extra="allow"
     )
+
+
+# Settings of the removed single-provider proxy. They are ignored now; the
+# upstream must be configured as a provider JSON in llm_hub_directory.
+REMOVED_PROXY_SETTINGS = (
+    "proxy_target_url",
+    "proxy_authorization_type",
+    "proxy_api_key",
+    "proxy_api_cert_path",
+    "proxy_api_cert_key_path",
+    "proxy_oidc_authorization_url",
+    "proxy_oidc_credentials",
+    "proxy_verify_ssl",
+    "proxy_ca_bundle_path",
+    "proxy_connect_timeout",
+    "proxy_read_timeout",
+    "proxy_write_timeout",
+    "proxy_pool_timeout",
+    "proxy_pricing_config",
+    "proxy_pricing_endpoint",
+    "proxy_pricing_prefix",
+    "proxy_pricing_currency",
+)
+
+
+def removed_proxy_settings_in_use(s: AppSettings) -> list[str]:
+    """Names of removed proxy settings still present in the environment or .env."""
+    # Unknown keys from .env land in model_extra with their LLM_ prefix kept.
+    present = {k.lower() for k in (getattr(s, "model_extra", None) or {})} | {
+        k.lower() for k in os.environ
+    }
+    return [name for name in REMOVED_PROXY_SETTINGS if f"llm_{name}" in present]
 
 
 # Load settings

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, Request
+from fastapi import FastAPI, Request
 from app.core.config import settings
 from app.core.logging_config import setup_logging
 from app.middlewares.logging_middleware import LoggingMiddleware
@@ -23,50 +23,32 @@ logger = setup_logging()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Application startup...")
-    client = None
-    if settings.proxy_enabled:
-        from app.core.proxy import create_async_client
 
-        client = await create_async_client()
+    from app.core.config import removed_proxy_settings_in_use
 
-    app.state.client = client
+    removed = removed_proxy_settings_in_use(settings)
+    if removed:
+        logger.warning(
+            "Ignoring removed single-provider proxy settings; configure the "
+            "upstream as a provider JSON in llm_hub_directory with \"default\": true",
+            settings=removed,
+        )
 
-    # Always create LlmHub so aliases are available even in single-provider mode.
-    # Providers are only loaded/started when llm_hub_enabled is True.
     from app.services.llm_hub import LlmHub
 
     llm_hub = LlmHub()
-    if settings.llm_hub_enabled:
+    if settings.proxy_enabled:
         llm_hub.load_providers()
         await llm_hub.startup()
-    else:
-        llm_hub.load_aliases()
 
     app.state.llm_hub = llm_hub
 
-    # Initialize pricing cache
     pricing_cache = None
-    if llm_hub and llm_hub.providers:
+    if llm_hub.providers:
         from app.services.pricing import PricingCache
 
         pricing_cache = PricingCache(llm_hub.providers)
         await pricing_cache.startup()
-    elif settings.proxy_pricing_endpoint:
-        from app.services.pricing import PricingCache
-
-        logger.info(
-            f"Init pricing cache {settings.proxy_pricing_endpoint} {settings.proxy_pricing_prefix} {settings.proxy_pricing_currency}"
-        )
-        pricing_cache = PricingCache.from_endpoint(
-            url=settings.proxy_pricing_endpoint,
-            prefix=settings.proxy_pricing_prefix,
-            currency=settings.proxy_pricing_currency,
-        )
-        await pricing_cache.startup()
-    elif settings.proxy_pricing_config:
-        from app.services.pricing import PricingCache
-
-        pricing_cache = PricingCache.from_json(settings.proxy_pricing_config)
 
     app.state.pricing_cache = pricing_cache
 
@@ -138,10 +120,7 @@ async def lifespan(app: FastAPI):
 
     tracing_shutdown()
 
-    if llm_hub:
-        await llm_hub.shutdown()
-    if app.state.client:
-        await app.state.client.aclose()
+    await llm_hub.shutdown()
     logger.info("Application shutdown...")
 
 
@@ -180,6 +159,17 @@ def create_app() -> FastAPI:
             media_type=CONTENT_TYPE_LATEST,
         )
 
+    async def _proxy_problem(llm_hub) -> dict | None:
+        """Why /llm can't serve requests: no providers, or the default's circuit is open."""
+        if not llm_hub.providers:
+            return {"providers": "none loaded"}
+        default = llm_hub.default_provider
+        if default is not None:
+            cb = await default.circuit_breaker.get_status()
+            if cb["circuit_open"]:
+                return {"default_provider": default.config.prefix, "circuit_breaker": "open"}
+        return None
+
     @app.get("/livez")
     async def livez():
         """Liveness probe — process is alive, no dependency checks."""
@@ -188,24 +178,19 @@ def create_app() -> FastAPI:
     @app.get("/ready")
     async def ready():
         """Readiness probe — returns 200 if all enabled components are healthy, 503 otherwise."""
-        from app.core.proxy import circuit_breaker
-
         components = {
             "proxy": "ok" if settings.proxy_enabled else "disabled",
-            "llm_hub": "ok" if settings.llm_hub_enabled else "disabled",
+            "llm_hub": "ok" if settings.proxy_enabled else "disabled",
             "chain_hub": "ok" if settings.chain_hub_enabled else "disabled",
             "prompt_hub": "ok" if settings.prompt_hub_enabled else "disabled",
             "dashboard": "ok" if settings.dashboard_enabled else "disabled",
             "search_hub": "ok" if settings.search_hub_enabled else "disabled",
         }
 
-        if settings.proxy_enabled:
-            cb_status = await circuit_breaker.get_status()
-            if cb_status["circuit_open"]:
-                components["proxy"] = "degraded"
-
         llm_hub = getattr(app.state, "llm_hub", None)
-        if settings.llm_hub_enabled and llm_hub and llm_hub.providers:
+        if settings.proxy_enabled and llm_hub:
+            if await _proxy_problem(llm_hub):
+                components["proxy"] = "degraded"
             for prefix, provider in llm_hub.providers.items():
                 cb = await provider.circuit_breaker.get_status()
                 if cb["circuit_open"]:
@@ -236,11 +221,9 @@ def create_app() -> FastAPI:
     @app.get("/health")
     async def health_check() -> HealthCheck:
         """Full health status with component details — for dashboards and monitoring."""
-        from app.core.proxy import circuit_breaker
-
         components = {
             "proxy": "ok" if settings.proxy_enabled else "disabled",
-            "llm_hub": "ok" if settings.llm_hub_enabled else "disabled",
+            "llm_hub": "ok" if settings.proxy_enabled else "disabled",
             "chain_hub": "ok" if settings.chain_hub_enabled else "disabled",
             "prompt_hub": "ok" if settings.prompt_hub_enabled else "disabled",
             "dashboard": "ok" if settings.dashboard_enabled else "disabled",
@@ -250,16 +233,15 @@ def create_app() -> FastAPI:
 
         details: dict = {}
 
-        # Check circuit breaker state (legacy single-provider proxy)
-        if settings.proxy_enabled:
-            cb_status = await circuit_breaker.get_status()
-            if cb_status["circuit_open"]:
+        llm_hub = getattr(app.state, "llm_hub", None)
+        if settings.proxy_enabled and llm_hub:
+            problem = await _proxy_problem(llm_hub)
+            if problem:
                 components["proxy"] = "degraded"
-                details["proxy"] = {"circuit_breaker": "open"}
+                details["proxy"] = problem
 
         # Check LLM Hub providers — probe each provider's circuit breaker
-        llm_hub = getattr(app.state, "llm_hub", None)
-        if settings.llm_hub_enabled and llm_hub and llm_hub.providers:
+        if settings.proxy_enabled and llm_hub and llm_hub.providers:
             provider_statuses = {}
             for prefix, provider in llm_hub.providers.items():
                 cb = await provider.circuit_breaker.get_status()
@@ -269,10 +251,7 @@ def create_app() -> FastAPI:
                     provider_statuses[prefix] = "ok"
 
             if any(v != "ok" for v in provider_statuses.values()):
-                if all(v != "ok" for v in provider_statuses.values()):
-                    components["llm_hub"] = "degraded"
-                else:
-                    components["llm_hub"] = "degraded"
+                components["llm_hub"] = "degraded"
                 details["llm_hub_providers"] = provider_statuses
 
         # Check Search Hub provider circuit breakers
@@ -561,140 +540,108 @@ def create_app() -> FastAPI:
 
     if settings.proxy_enabled:
         from app.core.proxy import (
-            proxy_request_with_retries,
             get_model_version,
             proxy_request_to_provider,
             check_provider_access,
         )
-        from app.services.llm_authentication import get_authorization_headers
 
-        async def add_authz_header():
-            return await get_authorization_headers(app.state.client)
+        def _model_not_found(model: str) -> JSONResponse:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "error": f"model '{model}' matches no provider and no default "
+                    "provider is configured; use '<prefix>/<model>'"
+                },
+            )
 
         @app.api_route("/llm/version", methods=["GET"])
-        async def get_llm_version(
-            request: Request,
-            custom_headers: dict[str, str] = Depends(add_authz_header),
-            model_name: str = "GigaChat",
-        ):
+        async def get_llm_version(request: Request, model_name: str = "GigaChat"):
+            resolved = app.state.llm_hub.resolve_model(model_name)
+            if resolved is None:
+                return _model_not_found(model_name)
+            provider, upstream_model = resolved
+            auth_headers = await provider.get_auth_headers(request.headers)
+            denied = check_provider_access(provider.config, request, auth_headers)
+            if denied is not None:
+                return denied
             return await get_model_version(
-                model_name, app.state.client, request, custom_headers
+                upstream_model, provider, request, auth_headers
             )
 
         # Models endpoint — must be registered BEFORE the catch-all /llm/{path}
         @app.get("/llm/v1/models")
-        async def get_models(
-            request: Request, custom_headers: dict[str, str] = Depends(add_authz_header)
-        ):
-            llm_hub = app.state.llm_hub
-            if llm_hub and llm_hub.providers:
-                return JSONResponse(
-                    content=await llm_hub.get_merged_models(
-                        legacy_client=app.state.client,
-                        legacy_headers=custom_headers,
-                        request_headers=request.headers,
-                    )
+        async def get_models(request: Request):
+            return JSONResponse(
+                content=await app.state.llm_hub.get_merged_models(
+                    request_headers=request.headers,
                 )
-            # Fallback: proxy to upstream
-            return await proxy_request_with_retries(
-                app.state.client, "v1/models", request, custom_headers
             )
 
         @app.api_route("/llm/{full_path:path}", methods=["GET", "POST"])
-        async def proxy_request(
-            full_path: str,
-            request: Request,
-            custom_headers: dict[str, str] = Depends(add_authz_header),
-        ):
+        async def proxy_request(full_path: str, request: Request):
             llm_hub: LlmHub = app.state.llm_hub
 
-            # Multi-provider routing for POST requests when hub is enabled
-            if request.method == "POST" and llm_hub and llm_hub.providers:
-                body = await request.body()
+            async def forward(provider, model: str, upstream_model: str):
+                auth_headers = await provider.get_auth_headers(request.headers)
+                return await proxy_request_to_provider(
+                    provider=provider,
+                    path=full_path,
+                    request=request,
+                    auth_headers=auth_headers,
+                    original_model=model,
+                    stripped_model=upstream_model,
+                    pricing_cache=app.state.pricing_cache,
+                )
+
+            model = ""
+            if request.method == "POST":
                 try:
-                    body_json = json.loads(body)
-                    model = body_json.get("model", "")
-                except (json.JSONDecodeError, AttributeError):
+                    model = json.loads(await request.body()).get("model") or ""
+                except (json.JSONDecodeError, UnicodeDecodeError, AttributeError):
+                    model = ""
+                if not isinstance(model, str):
                     model = ""
 
-                if model:
-                    alias = llm_hub.resolve_alias(model)
-                    if alias:
-                        primary = llm_hub.resolve_model(alias.target)
-                        if primary:
-                            p_provider, p_stripped = primary
-                            p_headers = await p_provider.get_auth_headers(request.headers)
-                            # Access/credential errors are the caller's: don't reroute
-                            # them to the fallback provider.
-                            denied = check_provider_access(
-                                p_provider.config, request, p_headers
-                            )
-                            if denied is not None:
-                                return denied
-                            response = await proxy_request_to_provider(
-                                provider=p_provider,
-                                path=full_path,
-                                request=request,
-                                auth_headers=p_headers,
-                                original_model=model,
-                                stripped_model=p_stripped,
-                                pricing_cache=app.state.pricing_cache,
-                            )
-                            if (
-                                alias.fallback
-                                and isinstance(response, JSONResponse)
-                                and response.status_code >= 400
-                            ):
-                                fb = llm_hub.resolve_model(alias.fallback)
-                                if fb:
-                                    fb_provider, fb_stripped = fb
-                                    fb_headers = await fb_provider.get_auth_headers(request.headers)
-                                    response = await proxy_request_to_provider(
-                                        provider=fb_provider,
-                                        path=full_path,
-                                        request=request,
-                                        auth_headers=fb_headers,
-                                        original_model=model,
-                                        stripped_model=fb_stripped,
-                                        pricing_cache=app.state.pricing_cache,
-                                    )
-                            return response
+            # No model to route on (GET, multipart, non-JSON body): default provider.
+            if not model:
+                default = llm_hub.default_provider
+                if default is None:
+                    return JSONResponse(
+                        status_code=404,
+                        content={
+                            "error": "request has no model and no default provider "
+                            "is configured"
+                        },
+                    )
+                return await forward(default, "", "")
 
-                    resolved = llm_hub.resolve_model(model)
-                    if resolved:
-                        provider, stripped_model = resolved
-                        provider_headers = await provider.get_auth_headers(request.headers)
-                        return await proxy_request_to_provider(
-                            provider=provider,
-                            path=full_path,
-                            request=request,
-                            auth_headers=provider_headers,
-                            original_model=model,
-                            stripped_model=stripped_model,
-                            pricing_cache=app.state.pricing_cache,
-                        )
+            alias = llm_hub.resolve_alias(model)
+            if alias is None:
+                resolved = llm_hub.resolve_model(model)
+                if resolved is None:
+                    return _model_not_found(model)
+                return await forward(resolved[0], model, resolved[1])
 
-            # Legacy single-provider path — apply alias model-name rewrite if configured
-            legacy_body = None
-            if request.method == "POST" and llm_hub:
-                raw = await request.body()
-                try:
-                    body_json = json.loads(raw)
-                    model = body_json.get("model", "")
-                    alias = llm_hub.resolve_alias(model) if model else None
-                    if alias:
-                        body_json["model"] = alias.target
-                        legacy_body = json.dumps(body_json).encode()
-                except (json.JSONDecodeError, AttributeError):
-                    pass
-            return await proxy_request_with_retries(
-                app.state.client,
-                full_path,
-                request,
-                custom_headers,
-                pricing_cache=app.state.pricing_cache,
-                body=legacy_body,
-            )
+            primary = llm_hub.resolve_model(alias.target)
+            if primary is None:
+                return _model_not_found(alias.target)
+            p_provider, p_upstream = primary
+            # Access/credential errors are the caller's: don't reroute them to the
+            # fallback provider.
+            p_headers = await p_provider.get_auth_headers(request.headers)
+            denied = check_provider_access(p_provider.config, request, p_headers)
+            if denied is not None:
+                return denied
+            response = await forward(p_provider, model, p_upstream)
+            if (
+                alias.fallback
+                and isinstance(response, JSONResponse)
+                and response.status_code >= 400
+            ):
+                fb = llm_hub.resolve_model(alias.fallback)
+                if fb:
+                    response = await forward(fb[0], model, fb[1])
+            return response
 
     from app.schemas.feedback import FeedbackRequest, FeedbackResponse
     from app.services.tracing import score_trace

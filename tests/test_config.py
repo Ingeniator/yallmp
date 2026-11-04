@@ -31,39 +31,31 @@ def test_type_coercion(monkeypatch):
     assert s.port == 9999
 
 
-def test_proxy_authorization_type_default_is_oidc(monkeypatch):
-    monkeypatch.delenv("LLM_PROXY_AUTHORIZATION_TYPE", raising=False)
-    assert AppSettings(_env_file=None).proxy_authorization_type == "OIDC"
-
-
-def test_proxy_authorization_type_bearer_is_static_key(monkeypatch):
-    monkeypatch.setenv("LLM_PROXY_AUTHORIZATION_TYPE", "bearer")
-    monkeypatch.setenv("LLM_PROXY_API_KEY", "k")
-    monkeypatch.delenv("LLM_PROXY_OIDC_AUTHORIZATION_URL", raising=False)
-    s = AppSettings(_env_file=None)
-    assert s.proxy_authorization_type == "BEARER"
-
-
-def test_proxy_authorization_type_legacy_bearer_with_oidc_url_becomes_oidc(monkeypatch):
+def test_llm_hub_enabled_is_alias_of_proxy_enabled(monkeypatch):
     import pytest
 
-    monkeypatch.setenv("LLM_PROXY_AUTHORIZATION_TYPE", "BEARER")
-    monkeypatch.setenv("LLM_PROXY_OIDC_AUTHORIZATION_URL", "http://auth/token")
-    monkeypatch.delenv("LLM_PROXY_API_KEY", raising=False)
-    with pytest.warns(DeprecationWarning, match="use OIDC"):
+    monkeypatch.delenv("LLM_PROXY_ENABLED", raising=False)
+    monkeypatch.setenv("LLM_LLM_HUB_ENABLED", "true")
+    with pytest.warns(DeprecationWarning, match="use proxy_enabled"):
         s = AppSettings(_env_file=None)
-    assert s.proxy_authorization_type == "OIDC"
+    assert s.proxy_enabled is True
 
 
-def test_proxy_authorization_type_is_upper_cased(monkeypatch):
-    monkeypatch.setenv("LLM_PROXY_AUTHORIZATION_TYPE", "apikey")
-    assert AppSettings(_env_file=None).proxy_authorization_type == "APIKEY"
+def test_removed_proxy_settings_detected(monkeypatch):
+    from app.core.config import removed_proxy_settings_in_use
+
+    monkeypatch.setenv("LLM_PROXY_TARGET_URL", "http://old")
+    monkeypatch.delenv("LLM_PROXY_AUTHORIZATION_TYPE", raising=False)
+    s = AppSettings(_env_file=None)
+    assert "proxy_target_url" in removed_proxy_settings_in_use(s)
+    assert "proxy_authorization_type" not in removed_proxy_settings_in_use(s)
 
 
-def test_proxy_authorization_type_rejects_unknown_value(monkeypatch):
-    import pytest
-    from pydantic import ValidationError
+def test_removed_proxy_settings_detected_in_env_file(monkeypatch, tmp_path):
+    from app.core.config import removed_proxy_settings_in_use
 
-    monkeypatch.setenv("LLM_PROXY_AUTHORIZATION_TYPE", "OIDC|CERT|APIKEY|NONE")
-    with pytest.raises(ValidationError, match="proxy_authorization_type"):
-        AppSettings(_env_file=None)
+    monkeypatch.delenv("LLM_PROXY_TARGET_URL", raising=False)
+    env_file = tmp_path / ".env"
+    env_file.write_text("LLM_PROXY_TARGET_URL=http://old\n")
+    s = AppSettings(_env_file=str(env_file))
+    assert removed_proxy_settings_in_use(s) == ["proxy_target_url"]

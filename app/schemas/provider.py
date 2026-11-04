@@ -83,6 +83,9 @@ class PricingInfo(BaseModel):
 class LlmProviderConfig(BaseModel):
     prefix: str
     base_url: str
+    # Receives models that match no prefix and no provider's ``models`` list.
+    # At most one provider should set it; the first one loaded wins.
+    default: bool = False
     auth: AuthConfig = Field(default_factory=AuthConfig)
     models: list[str] = Field(default_factory=list)
     verify_ssl: bool = True

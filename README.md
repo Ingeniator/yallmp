@@ -75,7 +75,38 @@ Prometheus alerting rules and Alertmanager config are in `devops/alerting/`:
 
 ### Core Endpoints
 
-- `POST /proxy/{path}` - Proxy LLM requests
+- `POST|GET /llm/{path}` - Proxy LLM requests to a provider
+- `GET /llm/v1/models` - Models of all providers, as `<prefix>/<model>`
+
+### Providers and routing
+
+Set `LLM_PROXY_ENABLED=true` and put one JSON file per upstream in
+`llm_hub_directory` (default `data/llm_hub`). There is no separate single-upstream
+mode: the old `LLM_PROXY_TARGET_URL` / `LLM_PROXY_AUTHORIZATION_TYPE` / `LLM_PROXY_PRICING_*`
+settings are ignored (a startup warning lists any still set). `LLM_LLM_HUB_ENABLED`
+is a deprecated alias of `LLM_PROXY_ENABLED`.
+
+The `model` in the request body picks the provider:
+
+1. An alias from `aliases.json`, resolved to its `target` (and `fallback` on error).
+2. `<prefix>/<model>` with a known prefix: that provider, prefix stripped.
+3. A name in some provider's `models` list: that provider, name unchanged.
+4. Anything else: the provider with `"default": true`, name unchanged.
+   Without a default provider such requests get 404.
+
+Requests without a model (GET, multipart uploads) go to the default provider.
+
+```json
+{
+    "prefix": "localllm",
+    "base_url": "${LLM_LOCALLLM_BASE_URL}",
+    "default": true,
+    "auth": { "type": "NONE" }
+}
+```
+
+A provider that references an unset `${VAR}` is skipped, so environment variables
+decide which providers load in each deployment.
 
 ### Request Headers
 

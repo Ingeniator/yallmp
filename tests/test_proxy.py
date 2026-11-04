@@ -5,11 +5,35 @@ from httpx import AsyncClient, Response as HTTPXResponse, Request as HTTPXReques
 from starlette.requests import Request
 from starlette.responses import StreamingResponse
 
+from app.schemas.provider import LlmProviderConfig
+from app.services.llm_hub import LlmProvider
+
+
+def _provider(client) -> LlmProvider:
+    provider = LlmProvider(
+        LlmProviderConfig(prefix="up", base_url="http://upstream", max_retries=0)
+    )
+    provider.client = client
+    return provider
+
+
+async def _call(client, request, path):
+    """Proxy *request* to a provider at http://upstream without rewriting the model."""
+    from app.core.proxy import proxy_request_to_provider
+
+    return await proxy_request_to_provider(
+        provider=_provider(client),
+        path=path,
+        request=request,
+        auth_headers={},
+        original_model="",
+        stripped_model="",
+    )
+
 
 @pytest.mark.asyncio
 async def test_proxy_passes_query_parameters():
     """Query parameters from the original request must be forwarded to the upstream."""
-    from app.core.proxy import proxy_request_with_retries
 
     # Build a fake Starlette request with query params
     scope = {
@@ -35,7 +59,6 @@ async def test_proxy_passes_query_parameters():
     mock_client.request = AsyncMock(return_value=mock_response)
 
     with patch("app.core.proxy.settings") as mock_settings:
-        mock_settings.proxy_target_url = "http://upstream"
         mock_settings.proxy_exclude_headers = "host,authorization"
         mock_settings.proxy_max_retries = 0
         mock_settings.proxy_base_delay = 0.1
@@ -44,12 +67,7 @@ async def test_proxy_passes_query_parameters():
         mock_settings.proxy_window_size = 60
         mock_settings.proxy_recovery_time = 30
 
-        await proxy_request_with_retries(
-            client=mock_client,
-            path="v1/models",
-            request=request,
-            custom_headers={},
-        )
+        await _call(mock_client, request, "v1/models")
 
     # Verify the upstream URL included query parameters
     call_args = mock_client.request.call_args
@@ -62,7 +80,6 @@ async def test_proxy_passes_query_parameters():
 @pytest.mark.asyncio
 async def test_proxy_works_without_query_parameters():
     """Requests without query params should not append a '?' to the URL."""
-    from app.core.proxy import proxy_request_with_retries
 
     scope = {
         "type": "http",
@@ -86,7 +103,6 @@ async def test_proxy_works_without_query_parameters():
     mock_client.request = AsyncMock(return_value=mock_response)
 
     with patch("app.core.proxy.settings") as mock_settings:
-        mock_settings.proxy_target_url = "http://upstream"
         mock_settings.proxy_exclude_headers = "host,authorization"
         mock_settings.proxy_max_retries = 0
         mock_settings.proxy_base_delay = 0.1
@@ -95,12 +111,7 @@ async def test_proxy_works_without_query_parameters():
         mock_settings.proxy_window_size = 60
         mock_settings.proxy_recovery_time = 30
 
-        await proxy_request_with_retries(
-            client=mock_client,
-            path="v1/models",
-            request=request,
-            custom_headers={},
-        )
+        await _call(mock_client, request, "v1/models")
 
     called_url = mock_client.request.call_args[0][1]
     assert called_url == "http://upstream/v1/models", f"Unexpected URL: {called_url}"
@@ -135,7 +146,6 @@ def _make_request(method="POST", path="/llm/v1/chat/completions", body=b"", head
 
 
 def _configure_settings(mock_settings):
-    mock_settings.proxy_target_url = "http://upstream"
     mock_settings.proxy_exclude_headers = "host"
     mock_settings.proxy_max_retries = 0
     mock_settings.proxy_base_delay = 0.1
@@ -170,7 +180,6 @@ class FakeUpstreamResponse:
 @pytest.mark.asyncio
 async def test_streaming_request_returns_streaming_response():
     """POST with stream=true should return a StreamingResponse with SSE media type."""
-    from app.core.proxy import proxy_request_with_retries
 
     body = json.dumps({"model": "test", "messages": [], "stream": True}).encode()
     request = _make_request(body=body)
@@ -188,10 +197,7 @@ async def test_streaming_request_returns_streaming_response():
 
     with _mock_settings() as mock_settings:
         _configure_settings(mock_settings)
-        response = await proxy_request_with_retries(
-            client=mock_client, path="v1/chat/completions",
-            request=request, custom_headers={},
-        )
+        response = await _call(mock_client, request, "v1/chat/completions")
 
     assert isinstance(response, StreamingResponse)
     assert response.media_type == "text/event-stream"
@@ -209,7 +215,6 @@ async def test_streaming_request_returns_streaming_response():
 @pytest.mark.asyncio
 async def test_streaming_request_upstream_error_returns_json():
     """If upstream returns non-2xx for a streaming request, return JSONResponse."""
-    from app.core.proxy import proxy_request_with_retries
 
     body = json.dumps({"model": "test", "messages": [], "stream": True}).encode()
     request = _make_request(body=body)
@@ -223,10 +228,7 @@ async def test_streaming_request_upstream_error_returns_json():
 
     with _mock_settings() as mock_settings:
         _configure_settings(mock_settings)
-        response = await proxy_request_with_retries(
-            client=mock_client, path="v1/chat/completions",
-            request=request, custom_headers={},
-        )
+        response = await _call(mock_client, request, "v1/chat/completions")
 
     from fastapi.responses import JSONResponse
     assert isinstance(response, JSONResponse)
@@ -236,7 +238,6 @@ async def test_streaming_request_upstream_error_returns_json():
 @pytest.mark.asyncio
 async def test_non_streaming_post_returns_json_response():
     """POST without stream=true should still return a regular JSONResponse."""
-    from app.core.proxy import proxy_request_with_retries
 
     body = json.dumps({"model": "test", "messages": [], "stream": False}).encode()
     request = _make_request(body=body)
@@ -251,10 +252,7 @@ async def test_non_streaming_post_returns_json_response():
 
     with _mock_settings() as mock_settings:
         _configure_settings(mock_settings)
-        response = await proxy_request_with_retries(
-            client=mock_client, path="v1/chat/completions",
-            request=request, custom_headers={},
-        )
+        response = await _call(mock_client, request, "v1/chat/completions")
 
     from fastapi.responses import JSONResponse
     assert isinstance(response, JSONResponse)
@@ -264,7 +262,6 @@ async def test_non_streaming_post_returns_json_response():
 @pytest.mark.asyncio
 async def test_streaming_connection_failure_returns_502():
     """Connection failure on streaming request should return 502 JSONResponse."""
-    from app.core.proxy import proxy_request_with_retries
     from httpx import ConnectError
 
     body = json.dumps({"model": "test", "messages": [], "stream": True}).encode()
@@ -276,10 +273,7 @@ async def test_streaming_connection_failure_returns_502():
 
     with _mock_settings() as mock_settings:
         _configure_settings(mock_settings)
-        response = await proxy_request_with_retries(
-            client=mock_client, path="v1/chat/completions",
-            request=request, custom_headers={},
-        )
+        response = await _call(mock_client, request, "v1/chat/completions")
 
     from fastapi.responses import JSONResponse
     assert isinstance(response, JSONResponse)
@@ -431,7 +425,7 @@ class TestEmitStreamingMetricsOutputBody:
 
 
 # ---------------------------------------------------------------------------
-# End-to-end streaming pipeline: proxy_request_with_retries produces full trace
+# End-to-end streaming pipeline: proxy_request_to_provider produces full trace
 # ---------------------------------------------------------------------------
 
 class TestStreamingPipelineEndToEnd:
@@ -461,7 +455,6 @@ class TestStreamingPipelineEndToEnd:
     @pytest.mark.asyncio
     async def test_full_content_reaches_trace(self):
         """All SSE delta chunks are assembled into a single output in the trace."""
-        from app.core.proxy import proxy_request_with_retries
 
         input_body = {"model": "test-model", "messages": [{"role": "user", "content": "hi"}], "stream": True}
         body = json.dumps(input_body).encode()
@@ -487,10 +480,7 @@ class TestStreamingPipelineEndToEnd:
             mock_settings.tracing_log_io = True
             mock_settings.billing_enabled = False
 
-            response = await proxy_request_with_retries(
-                client=mock_client, path="v1/chat/completions",
-                request=request, custom_headers={},
-            )
+            response = await _call(mock_client, request, "v1/chat/completions")
             # Consume the entire stream so the finally block fires
             async for _ in response.body_iterator:
                 pass
@@ -509,7 +499,6 @@ class TestStreamingPipelineEndToEnd:
         _emit_streaming_metrics joins all chunks before parsing, so truncated
         JSON in one chunk is completed by the next, and the full content is assembled.
         """
-        from app.core.proxy import proxy_request_with_retries
 
         input_body = {"model": "m", "messages": [], "stream": True}
         body = json.dumps(input_body).encode()
@@ -539,10 +528,7 @@ class TestStreamingPipelineEndToEnd:
             mock_settings.tracing_log_io = True
             mock_settings.billing_enabled = False
 
-            response = await proxy_request_with_retries(
-                client=mock_client, path="v1/chat/completions",
-                request=request, custom_headers={},
-            )
+            response = await _call(mock_client, request, "v1/chat/completions")
             async for _ in response.body_iterator:
                 pass
 

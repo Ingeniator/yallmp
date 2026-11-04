@@ -1,4 +1,7 @@
+import json
 from unittest.mock import patch, AsyncMock, MagicMock
+
+import pytest
 from starlette.testclient import TestClient
 from fastapi.responses import JSONResponse
 
@@ -90,7 +93,6 @@ def test_lifespan_no_proxy():
         mock_settings.chain_hub_enabled = False
         mock_settings.llm_hub_enabled = False
         mock_settings.dashboard_enabled = False
-        mock_settings.proxy_pricing_config = None
         mock_settings.search_hub_enabled = False
         mock_settings.tracing_enabled = False
         mock_settings.billing_enabled = False
@@ -102,37 +104,7 @@ def test_lifespan_no_proxy():
         with TestClient(app, raise_server_exceptions=False) as client:
             resp = client.get("/health")
             assert resp.status_code == 200
-            assert app.state.client is None
-
-
-def test_lifespan_with_proxy():
-    """Lifespan creates and closes the async client when proxy is enabled."""
-    mock_client = AsyncMock()
-
-    with patch("app.core.app.settings") as mock_settings, \
-         patch("app.core.proxy.create_async_client", AsyncMock(return_value=mock_client)):
-        mock_settings.app_name = "TestApp"
-        mock_settings.debug = False
-        mock_settings.root_path = ""
-        mock_settings.allowed_origins = ["*"]
-        mock_settings.proxy_enabled = True
-        mock_settings.prompt_hub_enabled = False
-        mock_settings.chain_hub_enabled = False
-        mock_settings.llm_hub_enabled = False
-        mock_settings.dashboard_enabled = False
-        mock_settings.proxy_pricing_config = None
-        mock_settings.search_hub_enabled = False
-        mock_settings.tracing_enabled = False
-        mock_settings.billing_enabled = False
-        mock_settings.version = "0.0.1-test"
-
-        from app.core.app import create_app
-        app = create_app()
-
-        with TestClient(app, raise_server_exceptions=False):
-            assert app.state.client is mock_client
-
-    mock_client.aclose.assert_awaited_once()
+            assert app.state.llm_hub.providers == {}
 
 
 # --- Feature-flag route handler tests ---
@@ -144,8 +116,6 @@ def _mock_settings(**overrides):
         app_name="TestApp", debug=False, root_path="", allowed_origins=["*"],
         proxy_enabled=False, prompt_hub_enabled=False, chain_hub_enabled=False,
         llm_hub_enabled=False, dashboard_enabled=False,
-        proxy_pricing_config=None, proxy_pricing_endpoint=None,
-        proxy_pricing_prefix=None, proxy_pricing_currency=None,
         search_hub_enabled=False, tracing_enabled=False, billing_enabled=False,
         debug_network_check=False, version="0.0.1-test",
     )
@@ -160,50 +130,139 @@ def _mock_settings(**overrides):
     return s
 
 
-def test_proxy_llm_version_route():
-    """GET /llm/version invokes get_model_version via the proxy branch."""
-    mock_get_model_version = AsyncMock(return_value={"version": "GigaChat-9b-128k-base:3.0"})
-    mock_get_auth_headers = AsyncMock(return_value={"Authorization": "Bearer tok"})
-    mock_http_client = AsyncMock()
+# --- /llm routing through LLM hub providers ---
 
-    with patch("app.core.app.settings", _mock_settings(proxy_enabled=True)), \
-         patch("app.core.proxy.get_model_version", mock_get_model_version), \
-         patch("app.core.proxy.proxy_request_with_retries", AsyncMock()), \
-         patch("app.services.llm_authentication.get_authorization_headers", mock_get_auth_headers), \
-         patch("app.core.proxy.create_async_client", AsyncMock(return_value=mock_http_client)):
 
-        from app.core.app import create_app
+@pytest.fixture
+def hub_dir(tmp_path, monkeypatch):
+    """Provider dir with a prefixed provider, a default one and an alias."""
+    import app.services.llm_hub as llm_hub_module
+
+    (tmp_path / "alpha.json").write_text(json.dumps(
+        {"prefix": "alpha", "base_url": "http://alpha", "models": ["alpha-model"]}
+    ))
+    (tmp_path / "local.json").write_text(json.dumps(
+        {"prefix": "local", "base_url": "http://local", "default": True}
+    ))
+    (tmp_path / "aliases.json").write_text(json.dumps(
+        {"smart": {"target": "alpha/big"}}
+    ))
+    monkeypatch.setattr(llm_hub_module.settings, "llm_hub_directory", str(tmp_path))
+    return tmp_path
+
+
+def _proxy_client(mock_proxy=None, mock_version=None):
+    mock_proxy = mock_proxy or AsyncMock(
+        return_value=JSONResponse(content={"choices": []}, status_code=200)
+    )
+    patches = [
+        patch("app.core.app.settings", _mock_settings(proxy_enabled=True)),
+        patch("app.core.proxy.proxy_request_to_provider", mock_proxy),
+        patch("app.core.proxy.get_model_version", mock_version or AsyncMock()),
+    ]
+    return patches, mock_proxy
+
+
+def _call(patches, method, path, **kw):
+    from contextlib import ExitStack
+    from app.core.app import create_app
+
+    with ExitStack() as stack:
+        for p in patches:
+            stack.enter_context(p)
         app = create_app()
-
         with TestClient(app, raise_server_exceptions=False) as client:
-            resp = client.get("/llm/version")
+            return client.request(method, path, **kw)
 
+
+def _routed(mock_proxy):
+    kw = mock_proxy.call_args.kwargs
+    return kw["provider"].config.prefix, kw["original_model"], kw["stripped_model"]
+
+
+def test_llm_route_prefixed_model_strips_prefix(hub_dir):
+    patches, mock_proxy = _proxy_client()
+    resp = _call(patches, "POST", "/llm/v1/chat/completions", json={"model": "alpha/x"})
+    assert resp.status_code == 200
+    assert _routed(mock_proxy) == ("alpha", "alpha/x", "x")
+
+
+def test_llm_route_unprefixed_model_goes_to_default_unchanged(hub_dir):
+    patches, mock_proxy = _proxy_client()
+    _call(patches, "POST", "/llm/v1/chat/completions", json={"model": "GigaChat"})
+    assert _routed(mock_proxy) == ("local", "GigaChat", "GigaChat")
+
+
+def test_llm_route_unknown_prefix_goes_to_default_unchanged(hub_dir):
+    patches, mock_proxy = _proxy_client()
+    _call(patches, "POST", "/llm/v1/chat/completions", json={"model": "meta/llama"})
+    assert _routed(mock_proxy) == ("local", "meta/llama", "meta/llama")
+
+
+def test_llm_route_models_list_match(hub_dir):
+    patches, mock_proxy = _proxy_client()
+    _call(patches, "POST", "/llm/v1/chat/completions", json={"model": "alpha-model"})
+    assert _routed(mock_proxy) == ("alpha", "alpha-model", "alpha-model")
+
+
+def test_llm_route_alias(hub_dir):
+    patches, mock_proxy = _proxy_client()
+    _call(patches, "POST", "/llm/v1/chat/completions", json={"model": "smart"})
+    assert _routed(mock_proxy) == ("alpha", "smart", "big")
+
+
+def test_llm_route_get_goes_to_default(hub_dir):
+    patches, mock_proxy = _proxy_client()
+    resp = _call(patches, "GET", "/llm/v1/files")
+    assert resp.status_code == 200
+    assert _routed(mock_proxy) == ("local", "", "")
+
+
+def test_llm_route_unknown_model_without_default_is_404(hub_dir):
+    (hub_dir / "local.json").unlink()
+    patches, mock_proxy = _proxy_client()
+    resp = _call(patches, "POST", "/llm/v1/chat/completions", json={"model": "GigaChat"})
+    assert resp.status_code == 404
+    assert "GigaChat" in resp.json()["error"]
+    mock_proxy.assert_not_awaited()
+
+
+def test_llm_route_no_model_without_default_is_404(hub_dir):
+    (hub_dir / "local.json").unlink()
+    patches, mock_proxy = _proxy_client()
+    resp = _call(patches, "GET", "/llm/v1/files")
+    assert resp.status_code == 404
+    mock_proxy.assert_not_awaited()
+
+
+def test_llm_version_route_uses_resolved_provider(hub_dir):
+    mock_version = AsyncMock(return_value={"version": "GigaChat-9b-128k-base:3.0"})
+    patches, _ = _proxy_client(mock_version=mock_version)
+    resp = _call(patches, "GET", "/llm/version")
     assert resp.status_code == 200
     assert resp.json() == {"version": "GigaChat-9b-128k-base:3.0"}
-    mock_get_auth_headers.assert_awaited_once()
-    mock_get_model_version.assert_awaited_once()
+    model, provider = mock_version.call_args.args[:2]
+    assert model == "GigaChat"
+    assert provider.config.prefix == "local"
 
 
-def test_proxy_llm_path_route():
-    """POST /llm/{path} invokes proxy_request_with_retries."""
-    mock_proxy = AsyncMock(return_value=JSONResponse(content={"choices": []}, status_code=200))
-    mock_get_auth_headers = AsyncMock(return_value={})
-    mock_http_client = AsyncMock()
+def test_llm_models_route_lists_hub_models(hub_dir):
+    patches, _ = _proxy_client()
+    with patch("app.services.llm_hub._fetch_model_list", AsyncMock(return_value=[{"id": "m1"}])):
+        resp = _call(patches, "GET", "/llm/v1/models")
+    ids = {m["id"] for m in resp.json()["data"]}
+    assert ids == {"alpha/alpha-model", "local/m1"}
 
-    with patch("app.core.app.settings", _mock_settings(proxy_enabled=True)), \
-         patch("app.core.proxy.proxy_request_with_retries", mock_proxy), \
-         patch("app.core.proxy.get_model_version", AsyncMock()), \
-         patch("app.services.llm_authentication.get_authorization_headers", mock_get_auth_headers), \
-         patch("app.core.proxy.create_async_client", AsyncMock(return_value=mock_http_client)):
 
-        from app.core.app import create_app
-        app = create_app()
+def test_health_proxy_degraded_without_providers(tmp_path, monkeypatch):
+    import app.services.llm_hub as llm_hub_module
 
-        with TestClient(app, raise_server_exceptions=False) as client:
-            resp = client.post("/llm/v1/chat/completions", json={"model": "test"})
-
-    assert resp.status_code == 200
-    mock_proxy.assert_awaited_once()
+    monkeypatch.setattr(llm_hub_module.settings, "llm_hub_directory", str(tmp_path))
+    patches, _ = _proxy_client()
+    resp = _call(patches, "GET", "/health")
+    data = resp.json()
+    assert data["components"]["proxy"] == "degraded"
+    assert data["details"]["proxy"] == {"providers": "none loaded"}
 
 
 def test_prompt_hub_get_prompts_route():

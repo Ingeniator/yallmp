@@ -24,15 +24,19 @@ def _error_response(status_code):
     )
 
 
+cb = CircuitBreaker()
+
+
 @pytest.fixture(autouse=True)
 def _reset_circuit():
-    """Reset circuit breaker state before each test."""
-    proxy_mod.circuit_breaker = CircuitBreaker()
+    """Fresh circuit breaker before each test."""
+    global cb
+    cb = CircuitBreaker()
 
 
 @pytest.mark.asyncio
 async def test_successful_request_clears_failures():
-    proxy_mod.circuit_breaker.failure_timestamps.append(1.0)
+    cb.failure_timestamps.append(1.0)
     func = AsyncMock(return_value=_ok_response())
 
     with patch.object(proxy_mod, "settings") as s:
@@ -43,11 +47,11 @@ async def test_successful_request_clears_failures():
         s.proxy_window_size = 60
         s.proxy_recovery_time = 30
 
-        result = await proxy_mod.exponential_backoff_retry(func)
+        result = await proxy_mod.exponential_backoff_retry(func, cb=cb)
 
     assert isinstance(result, HTTPXResponse)
     assert result.status_code == 200
-    assert proxy_mod.circuit_breaker.failure_timestamps == []
+    assert cb.failure_timestamps == []
 
 
 @pytest.mark.asyncio
@@ -64,7 +68,7 @@ async def test_429_triggers_retry():
         s.proxy_window_size = 60
         s.proxy_recovery_time = 30
 
-        result = await proxy_mod.exponential_backoff_retry(func)
+        result = await proxy_mod.exponential_backoff_retry(func, cb=cb)
 
     assert isinstance(result, HTTPXResponse)
     assert result.status_code == 200
@@ -85,7 +89,7 @@ async def test_500_triggers_retry():
         s.proxy_window_size = 60
         s.proxy_recovery_time = 30
 
-        result = await proxy_mod.exponential_backoff_retry(func)
+        result = await proxy_mod.exponential_backoff_retry(func, cb=cb)
 
     assert isinstance(result, HTTPXResponse)
     assert result.status_code == 200
@@ -103,23 +107,23 @@ async def test_circuit_breaker_activates():
         s.proxy_window_size = 60
         s.proxy_recovery_time = 30
 
-        result = await proxy_mod.exponential_backoff_retry(func)
+        result = await proxy_mod.exponential_backoff_retry(func, cb=cb)
 
     assert isinstance(result, JSONResponse)
     assert result.status_code == 503
-    assert proxy_mod.circuit_breaker.is_open is True
+    assert cb.is_open is True
 
 
 @pytest.mark.asyncio
 async def test_circuit_breaker_returns_503_while_open():
-    proxy_mod.circuit_breaker.is_open = True
-    proxy_mod.circuit_breaker.open_time = time.time()
+    cb.is_open = True
+    cb.open_time = time.time()
     func = AsyncMock()
 
     with patch.object(proxy_mod, "settings") as s:
         s.proxy_recovery_time = 9999
 
-        result = await proxy_mod.exponential_backoff_retry(func)
+        result = await proxy_mod.exponential_backoff_retry(func, cb=cb)
 
     assert isinstance(result, JSONResponse)
     assert result.status_code == 503
@@ -139,7 +143,7 @@ async def test_connect_error_handled():
         s.proxy_window_size = 60
         s.proxy_recovery_time = 30
 
-        result = await proxy_mod.exponential_backoff_retry(func)
+        result = await proxy_mod.exponential_backoff_retry(func, cb=cb)
 
     assert isinstance(result, JSONResponse)
     assert result.status_code == 523
@@ -158,7 +162,29 @@ async def test_request_error_handled():
         s.proxy_window_size = 60
         s.proxy_recovery_time = 30
 
-        result = await proxy_mod.exponential_backoff_retry(func)
+        result = await proxy_mod.exponential_backoff_retry(func, cb=cb)
 
     assert isinstance(result, JSONResponse)
     assert result.status_code == 523
+
+
+@pytest.mark.asyncio
+async def test_without_breaker_never_trips():
+    """No breaker passed: retries happen, but nothing trips or persists."""
+    func = AsyncMock(return_value=_error_response(500))
+
+    with patch.object(proxy_mod, "settings") as s:
+        s.proxy_max_retries = 0
+        s.proxy_base_delay = 0
+        s.proxy_backoff_factor = 1
+        s.proxy_failure_threshold = 1
+        s.proxy_window_size = 60
+        s.proxy_recovery_time = 30
+
+        first = await proxy_mod.exponential_backoff_retry(func)
+        second = await proxy_mod.exponential_backoff_retry(func)
+
+    # Each call gets a throwaway breaker, so the second call still hits upstream.
+    assert first.status_code == 503
+    assert second.status_code == 503
+    assert func.call_count == 2

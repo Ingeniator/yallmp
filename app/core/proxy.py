@@ -5,8 +5,6 @@ from httpx import (
     AsyncClient,
     ConnectError,
     RequestError,
-    Timeout,
-    Limits,
     Response as HTTPXResponse,
     AsyncByteStream,
 )
@@ -115,33 +113,6 @@ class CircuitBreaker:
             return False
 
 
-circuit_breaker = CircuitBreaker()
-
-
-async def create_async_client():
-    cert = None
-    if settings.proxy_authorization_type == "CERT":
-        cert = (settings.proxy_api_cert_path, settings.proxy_api_cert_key_path)
-    return AsyncClient(
-        cert=cert,
-        timeout=Timeout(
-            connect=settings.proxy_connect_timeout,
-            read=settings.proxy_read_timeout,
-            write=settings.proxy_write_timeout,
-            pool=settings.proxy_pool_timeout,
-        ),
-        limits=Limits(
-            max_connections=settings.max_connections,
-            max_keepalive_connections=settings.max_keepalive_connections,
-        ),
-        verify=settings.proxy_verify_ssl,
-    )
-
-
-async def get_circuit_status():
-    return await circuit_breaker.get_status()
-
-
 async def exponential_backoff_retry(
     func,
     *args,
@@ -152,7 +123,8 @@ async def exponential_backoff_retry(
     **kwargs,
 ) -> JSONResponse | HTTPXResponse:
     """Performs a request with exponential backoff on retryable errors."""
-    _cb = cb or circuit_breaker
+    # Without a provider breaker, a throwaway one: retries only, never trips.
+    _cb = cb or CircuitBreaker()
     _max_retries = (
         max_retries if max_retries is not None else settings.proxy_max_retries
     )
@@ -315,13 +287,15 @@ def _parse_model_version(model_string: str) -> dict | None:
 
 async def get_model_version(
     model_name: str,
-    client: AsyncClient,
+    provider,
     request: Request,
     custom_headers: dict[str, str] | None = None,
 ):
     custom_headers = custom_headers or {}
+    client = provider.client
+    config = provider.config
     path = "v1/chat/completions"
-    target_url = f"{settings.proxy_target_url}/{path}"
+    target_url = f"{config.base_url}/{path}"
     body = {
         "model": model_name,
         "messages": [{"role": "user", "content": "Reply with any single digit"}],
@@ -330,7 +304,15 @@ async def get_model_version(
     }
     try:
         response = await exponential_backoff_retry(
-            client.request, "POST", target_url, headers=custom_headers, json=body
+            client.request,
+            "POST",
+            target_url,
+            headers=custom_headers,
+            json=body,
+            cb=provider.circuit_breaker,
+            max_retries=config.max_retries,
+            base_delay=config.base_delay,
+            backoff_factor=config.backoff_factor,
         )
         if (
             isinstance(response, HTTPXResponse)
@@ -384,7 +366,7 @@ async def get_model_version(
 
 
 # ---------------------------------------------------------------------------
-# Shared proxy helpers (used by both legacy and multi-provider paths)
+# Shared proxy helpers
 # ---------------------------------------------------------------------------
 
 
@@ -721,7 +703,7 @@ async def _do_proxy_request(
     base_delay: float | None = None,
     backoff_factor: float | None = None,
 ) -> JSONResponse | StreamingResponse:
-    """Core proxy logic shared by legacy single-provider and multi-provider paths."""
+    """Core proxy logic: streaming or retried request, then metrics and tracing."""
 
     if _detect_streaming(method, body):
         return await _handle_streaming_request(
@@ -776,70 +758,6 @@ async def _do_proxy_request(
         )
 
     return _make_error_response(response, provider_label=provider_prefix)
-
-
-# ---------------------------------------------------------------------------
-# Public entry-points (kept for backward-compat with app.py and tests)
-# ---------------------------------------------------------------------------
-
-
-async def proxy_request_with_retries(
-    client: AsyncClient,
-    path: str,
-    request: Request,
-    custom_headers: dict[str, str] | None = None,
-    pricing_cache=None,
-    body: bytes | None = None,
-):
-    custom_headers = custom_headers or {}
-    target_url = f"{settings.proxy_target_url}/{path}"
-    if request.url.query:
-        target_url = f"{target_url}?{request.url.query}"
-
-    headers = _prepare_proxy_headers(request, custom_headers)
-
-    try:
-        method = request.method
-        if method.lower() == "post" and headers.get(
-            "content-type", ""
-        ).lower().startswith("multipart/form-data"):
-            return await stream_multipart_post(
-                request, client, target_url, headers=headers
-            )
-
-        if body is None:
-            body = await request.body()
-
-        return await _do_proxy_request(
-            client=client,
-            target_url=target_url,
-            method=method,
-            headers=headers,
-            body=body,
-            path=path,
-            request=request,
-            pricing_cache=pricing_cache,
-        )
-
-    except Exception as e:
-        logger.error(
-            "Proxy exception",
-            details={
-                "target_url": target_url,
-                "method": request.method,
-                "exception": str(e),
-                "exception_type": type(e).__name__,
-            },
-        )
-        return JSONResponse(
-            content={
-                "error": {
-                    "status_code": 500,
-                    "message": "Proxy request failed",
-                }
-            },
-            status_code=500,
-        )
 
 
 async def _handle_streaming_request(
@@ -1161,7 +1079,7 @@ async def proxy_request_to_provider(
     stripped_model: str,
     pricing_cache=None,
 ):
-    """Route a request to a specific LLM provider, stripping the model prefix."""
+    """Route a request to *provider*, replacing *original_model* with *stripped_model*."""
 
     config = provider.config
     denied = check_provider_access(config, request, auth_headers)
@@ -1175,6 +1093,13 @@ async def proxy_request_to_provider(
     headers = _prepare_proxy_headers(request, auth_headers, _passthrough_drop(config))
 
     try:
+        if request.method.lower() == "post" and headers.get(
+            "content-type", ""
+        ).lower().startswith("multipart/form-data"):
+            return await stream_multipart_post(
+                request, provider.client, target_url, headers=headers
+            )
+
         body = await request.body()
         body = _strip_model_prefix(body, original_model, stripped_model)
 

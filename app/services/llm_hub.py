@@ -27,7 +27,6 @@ _MODELS_TTL = 3600  # seconds a fetched model list is cached
 _MODELS_RETRY_AFTER = 60  # seconds before retrying a failed model list fetch
 _MODELS_FETCH_TIMEOUT = 10  # seconds; independent of the provider's completion timeouts
 _MODELS_PRUNE_AFTER = _MODELS_TTL  # seconds past expiry before an entry is dropped
-_LEGACY_MODELS_KEY = "__legacy__"
 # ${VAR} left over after os.path.expandvars, i.e. an unset environment variable.
 # ${headers.X} are PASSTHROUGH placeholders, resolved per request.
 _UNRESOLVED_ENV_VAR = re.compile(r"\$\{(?!headers\.)([^}]+)\}")
@@ -131,6 +130,7 @@ class LlmHub:
     def __init__(self):
         self.providers: dict[str, LlmProvider] = {}
         self.aliases: dict[str, AliasEntry] = {}
+        self.default_prefix: str | None = None
         # key -> (expires_at monotonic, entries)
         self._models_cache: dict[str, tuple[float, list[dict]]] = {}
         self._models_locks: dict[str, asyncio.Lock] = {}
@@ -173,6 +173,14 @@ class LlmHub:
 
                 seen_prefixes.add(config.prefix)
                 self.providers[config.prefix] = LlmProvider(config)
+                if config.default:
+                    if self.default_prefix is None:
+                        self.default_prefix = config.prefix
+                    else:
+                        logger.warning(
+                            f"Multiple default providers: keeping '{self.default_prefix}', "
+                            f"ignoring default flag on '{config.prefix}'"
+                        )
                 logger.info(
                     f"Loaded provider '{config.prefix}' from {json_file.name} with {len(config.models)} models"
                 )
@@ -180,14 +188,10 @@ class LlmHub:
             except Exception as e:
                 logger.error(f"Failed to load provider from {json_file.name}: {e}")
 
-        self._load_aliases(hub_path)
-
-    def load_aliases(self, directory: str | None = None):
-        """Load aliases.json from *directory* (defaults to llm_hub_directory).
-
-        Safe to call without providers — used by the single-provider path.
-        """
-        hub_path = Path(directory or settings.llm_hub_directory)
+        if self.providers and self.default_prefix is None:
+            logger.warning(
+                "No default LLM provider: models without a known prefix will be rejected"
+            )
         self._load_aliases(hub_path)
 
     def _load_aliases(self, hub_path: Path):
@@ -219,22 +223,34 @@ class LlmHub:
         coros = [provider.shutdown() for provider in self.providers.values()]
         await asyncio.gather(*coros, return_exceptions=True)
 
-    def resolve_model(self, prefixed_name: str) -> tuple[LlmProvider, str] | None:
-        """Split 'prefix/model' and return (provider, stripped_model) or None."""
-        if "/" not in prefixed_name:
-            return None
+    @property
+    def default_provider(self) -> LlmProvider | None:
+        return self.providers.get(self.default_prefix) if self.default_prefix else None
 
-        prefix, model = prefixed_name.split("/", 1)
-        provider = self.providers.get(prefix)
-        if provider is None:
-            # prefix doesn't match any known provider — could be a model name with /
-            return None
-        return provider, model
+    def resolve_model(self, model_name: str) -> tuple[LlmProvider, str] | None:
+        """Return (provider, upstream_model) for *model_name*, or None.
+
+        1. 'prefix/model' with a known prefix: that provider, prefix stripped.
+        2. A provider whose ``models`` list contains the name: sent unchanged.
+        3. The default provider: sent unchanged.
+        """
+        if "/" in model_name:
+            prefix, model = model_name.split("/", 1)
+            provider = self.providers.get(prefix)
+            if provider is not None:
+                return provider, model
+
+        for provider in self.providers.values():
+            if model_name in provider.config.models:
+                return provider, model_name
+
+        default = self.default_provider
+        if default is not None:
+            return default, model_name
+        return None
 
     async def get_merged_models(
         self,
-        legacy_client: AsyncClient | None = None,
-        legacy_headers: Mapping[str, str] | None = None,
         request_headers: Mapping[str, str] | None = None,
     ) -> dict:
         """Return an OpenAI-compatible model list merged from all providers.
@@ -242,7 +258,6 @@ class LlmHub:
         Providers with a configured ``models`` list contribute those entries.
         Providers without one are queried at ``{base_url}/v1/models``; their
         entries keep the original attributes with ``id`` prefixed.
-        If *legacy_client* is given, the legacy upstream's models are appended as is.
         Remote lists are cached for ``_MODELS_TTL`` seconds.
         """
         self._prune_models_cache()
@@ -264,17 +279,6 @@ class LlmHub:
                     )
             elif provider.client is not None:
                 tasks.append(self._provider_models(prefix, provider, request_headers))
-
-        if legacy_client is not None:
-
-            async def legacy_fetch() -> list[dict]:
-                return await _fetch_model_list(
-                    legacy_client,
-                    f"{settings.proxy_target_url.rstrip('/')}/v1/models",
-                    legacy_headers or {},
-                )
-
-            tasks.append(self._cached_models(_LEGACY_MODELS_KEY, legacy_fetch))
 
         seen = {m["id"] for m in data}
         for entries in await asyncio.gather(*tasks):

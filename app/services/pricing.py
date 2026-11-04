@@ -1,8 +1,6 @@
 import asyncio
-import json
 import time
 from dataclasses import dataclass
-from pathlib import Path
 
 import httpx
 
@@ -39,59 +37,6 @@ class PricingCache:
         self._ttl = ttl
         self._last_refresh: float = 0
         self._task: asyncio.Task | None = None
-
-    @classmethod
-    def from_json(cls, path: str) -> "PricingCache":
-        """Create a PricingCache from a static JSON config file.
-
-        Expected format (same as llm_hub provider config):
-        {
-          "prefix": "myproxy",
-          "currency": "USD",
-          "pricing": {
-            "model-name": {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002}
-          }
-        }
-        """
-        instance = cls(providers=[])
-        data = json.loads(Path(path).read_text())
-        prefix = data.get("prefix", "proxy")
-        currency = data.get("currency", "USD")
-        pricing_raw = data.get("pricing", {})
-
-        models: dict[str, PricingInfo] = {}
-        for model_id, costs in pricing_raw.items():
-            models[model_id] = PricingInfo(
-                input_cost_per_token=float(costs.get("input_cost_per_token", 0)),
-                output_cost_per_token=float(costs.get("output_cost_per_token", 0)),
-            )
-
-        if models:
-            instance._cache[prefix] = models
-            instance._currencies[prefix] = currency
-            logger.info(f"Loaded static pricing for '{prefix}': {len(models)} models")
-
-        return instance
-
-    @classmethod
-    def from_endpoint(
-        cls,
-        url: str,
-        prefix: str = "proxy",
-        currency: str = "USD",
-        ttl: int = _DEFAULT_TTL,
-    ) -> "PricingCache":
-        """Create a PricingCache that fetches pricing from a remote endpoint.
-
-        The endpoint is polled on startup and refreshed every *ttl* seconds.
-        Expected response: OpenRouter-style ``{model_id: {pricing: {input, output}}}``
-        or flat ``{model_id: {input_cost_per_token, output_cost_per_token}}``.
-        """
-        instance = cls(providers={}, ttl=ttl)
-        instance._endpoint_url = url
-        instance._endpoint_prefix = prefix
-        instance._endpoint_currency = currency
-        return instance
 
     # ------------------------------------------------------------------
     # Public API
@@ -164,16 +109,6 @@ class PricingCache:
             await self._refresh()
 
     async def _refresh(self):
-        # Standalone endpoint mode (from_endpoint factory)
-        endpoint_url = getattr(self, "_endpoint_url", None)
-        if endpoint_url:
-            await self._fetch_endpoint(
-                endpoint_url,
-                self._endpoint_prefix,
-                self._endpoint_currency,
-            )
-
-        # Provider-based mode (LLM Hub)
         for _, provider in self._providers.items():
             config = provider.config
             prefix = config.prefix

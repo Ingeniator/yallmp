@@ -92,20 +92,71 @@ def test_resolve_model_with_known_prefix(hub):
     assert model == "model-a"
 
 
-def test_resolve_model_unknown_prefix(hub):
-    result = hub.resolve_model("unknown/model")
-    assert result is None
+def test_resolve_model_unknown_prefix_without_default(hub):
+    assert hub.default_prefix is None
+    assert hub.resolve_model("unknown/model") is None
 
 
-def test_resolve_model_no_slash(hub):
-    result = hub.resolve_model("plain-model-name")
-    assert result is None
+def test_resolve_model_no_slash_without_default(hub):
+    assert hub.resolve_model("plain-model-name") is None
 
 
-def test_resolve_model_with_slash_in_model_name(hub):
-    """Model names like 'meta-llama/Llama-3' should fall back to None if prefix is unknown."""
-    result = hub.resolve_model("meta-llama/Llama-3")
-    assert result is None
+def test_resolve_model_unprefixed_from_models_list(hub):
+    """An unprefixed name listed in a provider's ``models`` goes there unchanged."""
+    provider, model = hub.resolve_model("model-x")
+    assert provider.config.prefix == "beta"
+    assert model == "model-x"
+
+
+@pytest.fixture
+def hub_with_default(provider_dir):
+    path = os.path.join(provider_dir, "gamma.json")
+    with open(path, "w") as f:
+        json.dump({"prefix": "gamma", "base_url": "http://gamma", "default": True}, f)
+    h = LlmHub()
+    h.load_providers(provider_dir)
+    return h
+
+
+def test_default_provider_loaded(hub_with_default):
+    assert hub_with_default.default_prefix == "gamma"
+    assert hub_with_default.default_provider.config.prefix == "gamma"
+
+
+def test_resolve_model_no_slash_goes_to_default(hub_with_default):
+    provider, model = hub_with_default.resolve_model("plain-model-name")
+    assert provider.config.prefix == "gamma"
+    assert model == "plain-model-name"
+
+
+def test_resolve_model_unknown_prefix_goes_to_default_unchanged(hub_with_default):
+    """'meta-llama/Llama-3' is a model name, not a prefix: sent whole to the default."""
+    provider, model = hub_with_default.resolve_model("meta-llama/Llama-3")
+    assert provider.config.prefix == "gamma"
+    assert model == "meta-llama/Llama-3"
+
+
+def test_resolve_model_models_list_beats_default(hub_with_default):
+    provider, model = hub_with_default.resolve_model("model-a")
+    assert provider.config.prefix == "alpha"
+    assert model == "model-a"
+
+
+def test_resolve_model_known_prefix_beats_default(hub_with_default):
+    provider, model = hub_with_default.resolve_model("beta/anything")
+    assert provider.config.prefix == "beta"
+    assert model == "anything"
+
+
+def test_multiple_defaults_first_wins(tmp_path):
+    for name in ("a", "b"):
+        (tmp_path / f"{name}.json").write_text(
+            json.dumps({"prefix": name, "base_url": f"http://{name}", "default": True})
+        )
+    h = LlmHub()
+    h.load_providers(str(tmp_path))
+    assert h.default_prefix == "a"
+    assert set(h.providers) == {"a", "b"}
 
 
 def test_resolve_model_multi_slash(hub):
@@ -258,34 +309,6 @@ async def test_get_merged_models_provider_unreachable_returns_rest(hub):
     ids = [m["id"] for m in result["data"]]
     assert "alpha/model-a" in ids
     assert not any(i.startswith("dyn/") for i in ids)
-
-
-@pytest.mark.asyncio
-async def test_get_merged_models_merges_legacy(hub, monkeypatch):
-    import app.services.llm_hub as llm_hub_module
-
-    monkeypatch.setattr(llm_hub_module.settings, "proxy_target_url", "http://legacy")
-    legacy = MagicMock()
-    legacy.get = AsyncMock(
-        return_value=_models_response(
-            [
-                {"id": "anthropic/opus-5", "object": "model", "created": 123},
-                {"id": "alpha/model-a", "object": "model"},
-            ]
-        )
-    )
-
-    result = await hub.get_merged_models(
-        legacy_client=legacy, legacy_headers={"X-Custom": "1"}
-    )
-
-    ids = [m["id"] for m in result["data"]]
-    assert "anthropic/opus-5" in ids
-    assert ids.count("alpha/model-a") == 1
-    legacy_entry = next(m for m in result["data"] if m["id"] == "anthropic/opus-5")
-    assert legacy_entry["created"] == 123
-    assert legacy.get.call_args.args[0] == "http://legacy/v1/models"
-    assert legacy.get.call_args.kwargs["headers"] == {"X-Custom": "1"}
 
 
 @pytest.mark.asyncio
@@ -533,31 +556,6 @@ def test_example_aliases_file_loads():
         assert "/" in entry.target, f"alias '{name}' target must be prefix/model"
         if entry.fallback:
             assert "/" in entry.fallback, f"alias '{name}' fallback must be prefix/model"
-
-
-def test_load_aliases_standalone(tmp_path):
-    """load_aliases() works without any providers loaded."""
-    aliases = {"quick": {"target": "gpt-4o-mini"}, "smart": {"target": "gpt-4o"}}
-    (tmp_path / "aliases.json").write_text(json.dumps(aliases))
-    h = LlmHub()
-    h.load_aliases(str(tmp_path))
-    assert h.providers == {}
-    assert h.aliases["quick"].target == "gpt-4o-mini"
-    assert h.aliases["smart"].target == "gpt-4o"
-
-
-def test_load_aliases_standalone_missing_file(tmp_path):
-    """load_aliases() with no aliases.json leaves aliases empty."""
-    h = LlmHub()
-    h.load_aliases(str(tmp_path))
-    assert h.aliases == {}
-
-
-def test_load_aliases_standalone_invalid_json(tmp_path):
-    (tmp_path / "aliases.json").write_text("not json")
-    h = LlmHub()
-    h.load_aliases(str(tmp_path))
-    assert h.aliases == {}
 
 
 @pytest.mark.asyncio

@@ -12,13 +12,20 @@ from app.core.proxy import (
     _extract_tool_calls,
     _extract_streaming_tool_calls,
     get_model_version,
-    proxy_request_with_retries,
+    proxy_request_to_provider,
     stream_multipart_post,
     RequestStreamWrapper,
-    create_async_client,
-    get_circuit_status,
-    CircuitBreaker,
 )
+from app.schemas.provider import LlmProviderConfig
+from app.services.llm_hub import LlmProvider
+
+
+def _provider(client=None) -> LlmProvider:
+    provider = LlmProvider(
+        LlmProviderConfig(prefix="up", base_url="http://upstream", max_retries=0)
+    )
+    provider.client = client or AsyncMock(spec=AsyncClient)
+    return provider
 
 
 # --- _parse_model_version ---
@@ -41,65 +48,6 @@ def test_parse_model_version_default():
 
 def test_parse_model_version_invalid():
     assert _parse_model_version("no-colon-here") is None
-
-
-# --- get_circuit_status ---
-
-
-@pytest.fixture(autouse=True)
-def _reset_circuit():
-    proxy_mod.circuit_breaker = CircuitBreaker()
-
-
-@pytest.mark.asyncio
-async def test_get_circuit_status():
-    result = await get_circuit_status()
-    assert result["circuit_open"] is False
-    assert result["circuit_open_time"] == 0
-    assert result["failure_timestamps"] == []
-
-
-# --- create_async_client ---
-
-
-@pytest.mark.asyncio
-async def test_create_async_client_default():
-    with patch.object(proxy_mod, "settings") as s:
-        s.proxy_authorization_type = "OIDC"
-        s.proxy_connect_timeout = 10
-        s.proxy_read_timeout = 300
-        s.proxy_write_timeout = 30
-        s.proxy_pool_timeout = None
-        s.max_connections = 100
-        s.max_keepalive_connections = 20
-        s.proxy_verify_ssl = False
-
-        client = await create_async_client()
-
-    assert isinstance(client, AsyncClient)
-    await client.aclose()
-
-
-@pytest.mark.asyncio
-async def test_create_async_client_cert_branch():
-    """Verify the CERT branch sets the cert tuple (mocked to avoid real SSL)."""
-    with patch.object(proxy_mod, "settings") as s, \
-         patch("app.core.proxy.AsyncClient") as MockClient:
-        s.proxy_authorization_type = "CERT"
-        s.proxy_api_cert_path = "/path/cert.pem"
-        s.proxy_api_cert_key_path = "/path/key.pem"
-        s.proxy_connect_timeout = 10
-        s.proxy_read_timeout = 300
-        s.proxy_write_timeout = 30
-        s.proxy_pool_timeout = None
-        s.max_connections = 100
-        s.max_keepalive_connections = 20
-        s.proxy_verify_ssl = False
-
-        await create_async_client()
-
-    call_kwargs = MockClient.call_args[1]
-    assert call_kwargs["cert"] == ("/path/cert.pem", "/path/key.pem")
 
 
 # --- get_model_version ---
@@ -125,11 +73,8 @@ async def test_get_model_version_success():
         request=HTTPXRequest("POST", "http://upstream/v1/chat/completions"),
     )
 
-    with patch.object(proxy_mod, "exponential_backoff_retry", AsyncMock(return_value=mock_response)), \
-         patch.object(proxy_mod, "settings") as s:
-        s.proxy_target_url = "http://upstream"
-
-        result = await get_model_version("GigaChat", AsyncMock(), _fake_request())
+    with patch.object(proxy_mod, "exponential_backoff_retry", AsyncMock(return_value=mock_response)):
+        result = await get_model_version("GigaChat", _provider(), _fake_request())
 
     assert result == {"version": "GigaChat-9b-128k-base:3.0"}
 
@@ -142,11 +87,8 @@ async def test_get_model_version_error_response():
         request=HTTPXRequest("POST", "http://upstream/v1/chat/completions"),
     )
 
-    with patch.object(proxy_mod, "exponential_backoff_retry", AsyncMock(return_value=mock_response)), \
-         patch.object(proxy_mod, "settings") as s:
-        s.proxy_target_url = "http://upstream"
-
-        result = await get_model_version("GigaChat", AsyncMock(), _fake_request())
+    with patch.object(proxy_mod, "exponential_backoff_retry", AsyncMock(return_value=mock_response)):
+        result = await get_model_version("GigaChat", _provider(), _fake_request())
 
     assert isinstance(result, JSONResponse)
     assert result.status_code == 400
@@ -157,11 +99,8 @@ async def test_get_model_version_json_response_passthrough():
     """When exponential_backoff_retry returns a JSONResponse (e.g., circuit breaker 503), pass it through."""
     mock_response = JSONResponse(content={"error": "Circuit breaker open"}, status_code=503)
 
-    with patch.object(proxy_mod, "exponential_backoff_retry", AsyncMock(return_value=mock_response)), \
-         patch.object(proxy_mod, "settings") as s:
-        s.proxy_target_url = "http://upstream"
-
-        result = await get_model_version("GigaChat", AsyncMock(), _fake_request())
+    with patch.object(proxy_mod, "exponential_backoff_retry", AsyncMock(return_value=mock_response)):
+        result = await get_model_version("GigaChat", _provider(), _fake_request())
 
     assert isinstance(result, JSONResponse)
     assert result.status_code == 503
@@ -169,17 +108,14 @@ async def test_get_model_version_json_response_passthrough():
 
 @pytest.mark.asyncio
 async def test_get_model_version_exception():
-    with patch.object(proxy_mod, "exponential_backoff_retry", AsyncMock(side_effect=RuntimeError("boom"))), \
-         patch.object(proxy_mod, "settings") as s:
-        s.proxy_target_url = "http://upstream"
-
-        result = await get_model_version("GigaChat", AsyncMock(), _fake_request())
+    with patch.object(proxy_mod, "exponential_backoff_retry", AsyncMock(side_effect=RuntimeError("boom"))):
+        result = await get_model_version("GigaChat", _provider(), _fake_request())
 
     assert isinstance(result, JSONResponse)
     assert result.status_code == 500
 
 
-# --- proxy_request_with_retries ---
+# --- proxy_request_to_provider ---
 
 
 def _make_starlette_request(method="GET", path="/llm/v1/chat/completions", query_string=b""):
@@ -199,7 +135,6 @@ def _make_starlette_request(method="GET", path="/llm/v1/chat/completions", query
 
 def _patch_settings():
     return patch.object(proxy_mod, "settings", **{
-        "proxy_target_url": "http://upstream",
         "proxy_exclude_headers": "host,authorization",
         "proxy_max_retries": 0,
         "proxy_base_delay": 0,
@@ -222,9 +157,8 @@ async def test_proxy_request_completions_success():
     mock_client.request = AsyncMock(return_value=mock_response)
 
     with _patch_settings():
-        result = await proxy_request_with_retries(
-            mock_client, "v1/chat/completions",
-            _make_starlette_request("POST"), {},
+        result = await proxy_request_to_provider(
+            _provider(mock_client), "v1/chat/completions", _make_starlette_request("POST"), {}, "", "",
         )
 
     assert isinstance(result, JSONResponse)
@@ -243,9 +177,8 @@ async def test_proxy_request_error_response():
     mock_client.request = AsyncMock(return_value=mock_response)
 
     with _patch_settings():
-        result = await proxy_request_with_retries(
-            mock_client, "v1/chat/completions",
-            _make_starlette_request("POST"), {},
+        result = await proxy_request_to_provider(
+            _provider(mock_client), "v1/chat/completions", _make_starlette_request("POST"), {}, "", "",
         )
 
     assert isinstance(result, JSONResponse)
@@ -260,9 +193,8 @@ async def test_proxy_request_exception():
 
     with _patch_settings(), \
          patch.object(proxy_mod, "exponential_backoff_retry", AsyncMock(side_effect=RuntimeError("unexpected"))):
-        result = await proxy_request_with_retries(
-            mock_client, "v1/models",
-            _make_starlette_request(), {},
+        result = await proxy_request_to_provider(
+            _provider(mock_client), "v1/models", _make_starlette_request(), {}, "", "",
         )
 
     assert isinstance(result, JSONResponse)
@@ -533,7 +465,7 @@ def test_extract_streaming_tool_calls_skips_malformed_lines():
     assert _extract_streaming_tool_calls(full_text) == ["ok"]
 
 
-# --- proxy_request_with_retries: multipart branch ---
+# --- proxy_request_to_provider: multipart branch ---
 
 
 @pytest.mark.asyncio
@@ -558,8 +490,8 @@ async def test_proxy_request_multipart_delegates_to_stream():
 
     with _patch_settings(), \
          patch.object(proxy_mod, "stream_multipart_post", AsyncMock(return_value=expected)) as mock_stream:
-        result = await proxy_request_with_retries(
-            mock_client, "v1/upload", request, {},
+        result = await proxy_request_to_provider(
+            _provider(mock_client), "v1/upload", request, {}, "", "",
         )
 
     assert result is expected
