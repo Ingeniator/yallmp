@@ -165,6 +165,12 @@ class LlmHub:
 
                 config = LlmProviderConfig(**data)
 
+                if "/" in config.prefix:
+                    logger.error(
+                        f"Skipping {json_file.name}: prefix '{config.prefix}' contains '/'"
+                    )
+                    continue
+
                 if config.prefix in seen_prefixes:
                     logger.error(
                         f"Duplicate prefix '{config.prefix}' in {json_file.name}, skipping"
@@ -227,6 +233,12 @@ class LlmHub:
     def default_provider(self) -> LlmProvider | None:
         return self.providers.get(self.default_prefix) if self.default_prefix else None
 
+    @staticmethod
+    def strip_prefix(provider: LlmProvider, model_name: str) -> str:
+        """Drop the provider's own '<prefix>/' from *model_name*, if present."""
+        own = f"{provider.config.prefix}/"
+        return model_name[len(own):] if model_name.startswith(own) else model_name
+
     def resolve_model(self, model_name: str) -> tuple[LlmProvider, str] | None:
         """Return (provider, upstream_model) for *model_name*, or None.
 
@@ -235,10 +247,9 @@ class LlmHub:
         3. The default provider: sent unchanged.
         """
         if "/" in model_name:
-            prefix, model = model_name.split("/", 1)
-            provider = self.providers.get(prefix)
+            provider = self.providers.get(model_name.split("/", 1)[0])
             if provider is not None:
-                return provider, model
+                return provider, self.strip_prefix(provider, model_name)
 
         for provider in self.providers.values():
             if model_name in provider.config.models:

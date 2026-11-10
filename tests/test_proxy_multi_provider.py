@@ -511,3 +511,11 @@ def test_check_provider_access_denies_group_outside_allow_list():
         provider.config, _make_request(headers={"X-Group-Id": "other"}), {}
     )
     assert denied.status_code == 403
+
+
+def test_provider_header_is_never_forwarded():
+    from app.core.proxy import _passthrough_drop
+    from app.schemas.provider import LlmProviderConfig
+
+    config = LlmProviderConfig(prefix="p", base_url="http://p")
+    assert "x-provider" in _passthrough_drop(config)

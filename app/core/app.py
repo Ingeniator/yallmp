@@ -540,6 +540,7 @@ def create_app() -> FastAPI:
 
     if settings.proxy_enabled:
         from app.core.proxy import (
+            PROVIDER_HEADER,
             get_model_version,
             proxy_request_to_provider,
             check_provider_access,
@@ -554,9 +555,43 @@ def create_app() -> FastAPI:
                 },
             )
 
+        def _header_pin(request: Request):
+            """(provider pinned by X-Provider or None, error response or None)."""
+            prefix = request.headers.get(PROVIDER_HEADER, "").strip()
+            if not prefix:
+                return None, None
+            provider = app.state.llm_hub.providers.get(prefix)
+            if provider is None:
+                return None, JSONResponse(
+                    status_code=404,
+                    content={"error": f"unknown provider '{prefix}' in {PROVIDER_HEADER}"},
+                )
+            return provider, None
+
+        async def _forward(
+            request: Request, provider, path: str, model: str = "", upstream_model: str = ""
+        ):
+            auth_headers = await provider.get_auth_headers(request.headers)
+            return await proxy_request_to_provider(
+                provider=provider,
+                path=path,
+                request=request,
+                auth_headers=auth_headers,
+                original_model=model,
+                stripped_model=upstream_model,
+                pricing_cache=app.state.pricing_cache,
+            )
+
         @app.api_route("/llm/version", methods=["GET"])
         async def get_llm_version(request: Request, model_name: str = "GigaChat"):
-            resolved = app.state.llm_hub.resolve_model(model_name)
+            llm_hub: LlmHub = app.state.llm_hub
+            pinned, error = _header_pin(request)
+            if error is not None:
+                return error
+            if pinned is not None:
+                resolved = (pinned, llm_hub.strip_prefix(pinned, model_name))
+            else:
+                resolved = llm_hub.resolve_model(model_name)
             if resolved is None:
                 return _model_not_found(model_name)
             provider, upstream_model = resolved
@@ -571,6 +606,12 @@ def create_app() -> FastAPI:
         # Models endpoint — must be registered BEFORE the catch-all /llm/{path}
         @app.get("/llm/v1/models")
         async def get_models(request: Request):
+            # Pinned: the provider's own list, as /llm/@<prefix>/v1/models returns it.
+            pinned, error = _header_pin(request)
+            if error is not None:
+                return error
+            if pinned is not None:
+                return await _forward(request, pinned, "v1/models")
             return JSONResponse(
                 content=await app.state.llm_hub.get_merged_models(
                     request_headers=request.headers,
@@ -581,17 +622,33 @@ def create_app() -> FastAPI:
         async def proxy_request(full_path: str, request: Request):
             llm_hub: LlmHub = app.state.llm_hub
 
-            async def forward(provider, model: str, upstream_model: str):
-                auth_headers = await provider.get_auth_headers(request.headers)
-                return await proxy_request_to_provider(
-                    provider=provider,
-                    path=full_path,
-                    request=request,
-                    auth_headers=auth_headers,
-                    original_model=model,
-                    stripped_model=upstream_model,
-                    pricing_cache=app.state.pricing_cache,
+            async def forward(provider, model: str, upstream_model: str, path: str):
+                return await _forward(request, provider, path, model, upstream_model)
+
+            # An explicit provider pin: /llm/@<prefix>/... or the X-Provider header.
+            # Upstream API paths never start with "@", so the marker can't collide.
+            path_provider = None
+            path = full_path
+            if full_path.startswith("@"):
+                path_prefix, _, path = full_path[1:].partition("/")
+                path_provider = llm_hub.providers.get(path_prefix)
+                if path_provider is None:
+                    return JSONResponse(
+                        status_code=404,
+                        content={"error": f"unknown provider '{path_prefix}' in path"},
+                    )
+            header_provider, error = _header_pin(request)
+            if error is not None:
+                return error
+            if path_provider and header_provider and header_provider is not path_provider:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "error": f"provider '{path_prefix}' in path conflicts with "
+                        f"'{header_provider.config.prefix}' in {PROVIDER_HEADER}"
+                    },
                 )
+            pinned = path_provider or header_provider
 
             model = ""
             if request.method == "POST":
@@ -602,6 +659,37 @@ def create_app() -> FastAPI:
                 if not isinstance(model, str):
                     model = ""
 
+            async def via_alias(candidates):
+                """Try the alias's resolved entries in order; fall back on upstream errors."""
+                primary, *rest = candidates
+                # Access/credential errors are the caller's: don't reroute them.
+                p_headers = await primary[0].get_auth_headers(request.headers)
+                denied = check_provider_access(primary[0].config, request, p_headers)
+                if denied is not None:
+                    return denied
+                response = await forward(primary[0], model, primary[1], path)
+                if rest and isinstance(response, JSONResponse) and response.status_code >= 400:
+                    response = await forward(rest[0][0], model, rest[0][1], path)
+                return response
+
+            alias = llm_hub.resolve_alias(model) if model else None
+
+            # Pinned: traffic never leaves the provider. An alias uses only its
+            # entries on that provider; anything else is sent with just the
+            # provider's own prefix stripped.
+            if pinned is not None:
+                if alias is not None:
+                    candidates = [
+                        r
+                        for t in (alias.target, alias.fallback)
+                        if t and (r := llm_hub.resolve_model(t)) and r[0] is pinned
+                    ]
+                    if candidates:
+                        return await via_alias(candidates)
+                return await forward(
+                    pinned, model, llm_hub.strip_prefix(pinned, model), path
+                )
+
             # No model to route on (GET, multipart, non-JSON body): default provider.
             if not model:
                 default = llm_hub.default_provider
@@ -610,38 +698,22 @@ def create_app() -> FastAPI:
                         status_code=404,
                         content={
                             "error": "request has no model and no default provider "
-                            "is configured"
+                            f"is configured; use /llm/@<prefix>/... or {PROVIDER_HEADER}"
                         },
                     )
-                return await forward(default, "", "")
+                return await forward(default, "", "", path)
 
-            alias = llm_hub.resolve_alias(model)
             if alias is None:
                 resolved = llm_hub.resolve_model(model)
                 if resolved is None:
                     return _model_not_found(model)
-                return await forward(resolved[0], model, resolved[1])
+                return await forward(resolved[0], model, resolved[1], path)
 
             primary = llm_hub.resolve_model(alias.target)
             if primary is None:
                 return _model_not_found(alias.target)
-            p_provider, p_upstream = primary
-            # Access/credential errors are the caller's: don't reroute them to the
-            # fallback provider.
-            p_headers = await p_provider.get_auth_headers(request.headers)
-            denied = check_provider_access(p_provider.config, request, p_headers)
-            if denied is not None:
-                return denied
-            response = await forward(p_provider, model, p_upstream)
-            if (
-                alias.fallback
-                and isinstance(response, JSONResponse)
-                and response.status_code >= 400
-            ):
-                fb = llm_hub.resolve_model(alias.fallback)
-                if fb:
-                    response = await forward(fb[0], model, fb[1])
-            return response
+            fallback = llm_hub.resolve_model(alias.fallback) if alias.fallback else None
+            return await via_alias([primary] + ([fallback] if fallback else []))
 
     from app.schemas.feedback import FeedbackRequest, FeedbackResponse
     from app.services.tracing import score_trace

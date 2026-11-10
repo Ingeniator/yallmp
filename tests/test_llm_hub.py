@@ -613,3 +613,18 @@ async def test_models_cache_prunes_long_expired_entries(monkeypatch):
     await h.get_merged_models()
     assert "p#old" not in h._models_cache
     assert "p#old" not in h._models_locks
+
+
+def test_load_providers_rejects_prefix_with_slash(tmp_path):
+    (tmp_path / "p.json").write_text(json.dumps({"prefix": "a/b", "base_url": "http://x"}))
+    h = LlmHub()
+    h.load_providers(str(tmp_path))
+    assert h.providers == {}
+
+
+def test_load_providers_allows_former_reserved_prefixes(tmp_path):
+    """With the /llm/@<prefix>/ marker, prefixes like 'v1' can't clash with API paths."""
+    (tmp_path / "p.json").write_text(json.dumps({"prefix": "v1", "base_url": "http://x"}))
+    h = LlmHub()
+    h.load_providers(str(tmp_path))
+    assert "v1" in h.providers

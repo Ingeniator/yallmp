@@ -145,7 +145,12 @@ def hub_dir(tmp_path, monkeypatch):
         {"prefix": "local", "base_url": "http://local", "default": True}
     ))
     (tmp_path / "aliases.json").write_text(json.dumps(
-        {"smart": {"target": "alpha/big"}}
+        {
+            "smart": {"target": "alpha/big"},
+            "both": {"target": "alpha/big", "fallback": "local/small"},
+            "local-first": {"target": "local/small", "fallback": "alpha/big"},
+            "alpha-pair": {"target": "alpha/big", "fallback": "alpha/medium"},
+        }
     ))
     monkeypatch.setattr(llm_hub_module.settings, "llm_hub_directory", str(tmp_path))
     return tmp_path
@@ -252,6 +257,166 @@ def test_llm_models_route_lists_hub_models(hub_dir):
         resp = _call(patches, "GET", "/llm/v1/models")
     ids = {m["id"] for m in resp.json()["data"]}
     assert ids == {"alpha/alpha-model", "local/m1"}
+
+
+def _routed_path(mock_proxy):
+    kw = mock_proxy.call_args.kwargs
+    return kw["provider"].config.prefix, kw["path"]
+
+
+def test_llm_path_prefix_pins_provider_for_upload(hub_dir):
+    patches, mock_proxy = _proxy_client()
+    resp = _call(patches, "POST", "/llm/@alpha/v1/files",
+                 files={"file": ("t.jsonl", b"{}")}, data={"purpose": "fine-tune"})
+    assert resp.status_code == 200
+    assert _routed_path(mock_proxy) == ("alpha", "v1/files")
+
+
+def test_llm_path_prefix_pins_provider_for_get(hub_dir):
+    patches, mock_proxy = _proxy_client()
+    _call(patches, "GET", "/llm/@alpha/v1/fine_tuning/jobs/ftjob-1")
+    assert _routed_path(mock_proxy) == ("alpha", "v1/fine_tuning/jobs/ftjob-1")
+
+
+def test_llm_pinned_unprefixed_model_unchanged(hub_dir):
+    patches, mock_proxy = _proxy_client()
+    _call(patches, "POST", "/llm/@alpha/v1/fine_tuning/jobs", json={"model": "gpt-x"})
+    assert _routed(mock_proxy) == ("alpha", "gpt-x", "gpt-x")
+
+
+def test_llm_pinned_alias_uses_entry_on_pinned_provider(hub_dir):
+    patches, mock_proxy = _proxy_client()
+    _call(patches, "POST", "/llm/@alpha/v1/chat/completions", json={"model": "smart"})
+    assert _routed(mock_proxy) == ("alpha", "smart", "big")
+
+
+def test_llm_pinned_alias_uses_fallback_entry_when_target_elsewhere(hub_dir):
+    patches, mock_proxy = _proxy_client()
+    _call(patches, "POST", "/llm/@alpha/v1/chat/completions", json={"model": "local-first"})
+    assert _routed(mock_proxy) == ("alpha", "local-first", "big")
+
+
+def test_llm_pinned_alias_never_falls_back_to_other_provider(hub_dir):
+    mock_proxy = AsyncMock(return_value=JSONResponse(content={}, status_code=500))
+    patches, _ = _proxy_client(mock_proxy=mock_proxy)
+    resp = _call(patches, "POST", "/llm/@alpha/v1/chat/completions", json={"model": "both"})
+    assert resp.status_code == 500
+    assert mock_proxy.await_count == 1
+    assert _routed(mock_proxy) == ("alpha", "both", "big")
+
+
+def test_llm_pinned_alias_falls_back_within_provider(hub_dir):
+    mock_proxy = AsyncMock(side_effect=[
+        JSONResponse(content={}, status_code=500),
+        JSONResponse(content={"ok": True}, status_code=200),
+    ])
+    patches, _ = _proxy_client(mock_proxy=mock_proxy)
+    resp = _call(patches, "POST", "/llm/@alpha/v1/chat/completions", json={"model": "alpha-pair"})
+    assert resp.status_code == 200
+    assert _routed(mock_proxy) == ("alpha", "alpha-pair", "medium")
+
+
+def test_llm_pinned_alias_without_entry_on_provider_sent_unchanged(hub_dir):
+    """No entry on the pinned provider: the name may be a real upstream model."""
+    patches, mock_proxy = _proxy_client()
+    _call(patches, "POST", "/llm/@local/v1/chat/completions", json={"model": "smart"})
+    assert _routed(mock_proxy) == ("local", "smart", "smart")
+
+
+def test_llm_header_pin_alias_same_rules(hub_dir):
+    patches, mock_proxy = _proxy_client()
+    _call(patches, "POST", "/llm/v1/chat/completions", json={"model": "local-first"},
+          headers={"X-Provider": "alpha"})
+    assert _routed(mock_proxy) == ("alpha", "local-first", "big")
+
+
+def test_llm_unpinned_alias_falls_back_across_providers(hub_dir):
+    mock_proxy = AsyncMock(side_effect=[
+        JSONResponse(content={}, status_code=500),
+        JSONResponse(content={"ok": True}, status_code=200),
+    ])
+    patches, _ = _proxy_client(mock_proxy=mock_proxy)
+    resp = _call(patches, "POST", "/llm/v1/chat/completions", json={"model": "both"})
+    assert resp.status_code == 200
+    assert _routed(mock_proxy) == ("local", "both", "small")
+
+
+def test_llm_path_prefix_strips_own_model_prefix(hub_dir):
+    patches, mock_proxy = _proxy_client()
+    _call(patches, "POST", "/llm/@alpha/v1/chat/completions", json={"model": "alpha/x"})
+    assert _routed(mock_proxy) == ("alpha", "alpha/x", "x")
+    assert _routed_path(mock_proxy) == ("alpha", "v1/chat/completions")
+
+
+def test_llm_provider_name_without_marker_is_not_a_pin(hub_dir):
+    """/llm/alpha/... is an upstream path for the default provider, not a pin."""
+    patches, mock_proxy = _proxy_client()
+    _call(patches, "GET", "/llm/alpha/v1/files")
+    assert _routed_path(mock_proxy) == ("local", "alpha/v1/files")
+
+
+def test_llm_unknown_path_pin_is_404(hub_dir):
+    patches, mock_proxy = _proxy_client()
+    resp = _call(patches, "GET", "/llm/@nope/v1/files")
+    assert resp.status_code == 404
+    assert "nope" in resp.json()["error"]
+    mock_proxy.assert_not_awaited()
+
+
+def test_llm_provider_header_pins_provider(hub_dir):
+    patches, mock_proxy = _proxy_client()
+    _call(patches, "GET", "/llm/v1/files", headers={"X-Provider": "alpha"})
+    assert _routed_path(mock_proxy) == ("alpha", "v1/files")
+
+
+def test_llm_provider_header_unknown_is_404(hub_dir):
+    patches, mock_proxy = _proxy_client()
+    resp = _call(patches, "GET", "/llm/v1/files", headers={"X-Provider": "nope"})
+    assert resp.status_code == 404
+    mock_proxy.assert_not_awaited()
+
+
+def test_llm_provider_header_conflicting_with_path_is_400(hub_dir):
+    patches, mock_proxy = _proxy_client()
+    resp = _call(patches, "GET", "/llm/@alpha/v1/files", headers={"X-Provider": "local"})
+    assert resp.status_code == 400
+    mock_proxy.assert_not_awaited()
+
+
+def test_llm_provider_header_matching_path_is_ok(hub_dir):
+    patches, mock_proxy = _proxy_client()
+    _call(patches, "GET", "/llm/@alpha/v1/files", headers={"X-Provider": "alpha"})
+    assert _routed_path(mock_proxy) == ("alpha", "v1/files")
+
+
+def test_llm_models_route_header_pin_proxies_provider_list(hub_dir):
+    patches, mock_proxy = _proxy_client()
+    resp = _call(patches, "GET", "/llm/v1/models", headers={"X-Provider": "alpha"})
+    assert resp.status_code == 200
+    assert _routed_path(mock_proxy) == ("alpha", "v1/models")
+
+
+def test_llm_models_route_header_unknown_is_404(hub_dir):
+    patches, mock_proxy = _proxy_client()
+    resp = _call(patches, "GET", "/llm/v1/models", headers={"X-Provider": "nope"})
+    assert resp.status_code == 404
+    mock_proxy.assert_not_awaited()
+
+
+def test_llm_version_route_header_pin(hub_dir):
+    mock_version = AsyncMock(return_value={"version": "v"})
+    patches, _ = _proxy_client(mock_version=mock_version)
+    _call(patches, "GET", "/llm/version?model_name=alpha/GigaChat", headers={"X-Provider": "alpha"})
+    model, provider = mock_version.call_args.args[:2]
+    assert (provider.config.prefix, model) == ("alpha", "GigaChat")
+
+
+def test_llm_version_route_header_unknown_is_404(hub_dir):
+    mock_version = AsyncMock()
+    patches, _ = _proxy_client(mock_version=mock_version)
+    resp = _call(patches, "GET", "/llm/version", headers={"X-Provider": "nope"})
+    assert resp.status_code == 404
+    mock_version.assert_not_awaited()
 
 
 def test_health_proxy_degraded_without_providers(tmp_path, monkeypatch):

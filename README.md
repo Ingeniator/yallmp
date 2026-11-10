@@ -76,6 +76,7 @@ Prometheus alerting rules and Alertmanager config are in `devops/alerting/`:
 ### Core Endpoints
 
 - `POST|GET /llm/{path}` - Proxy LLM requests to a provider
+- `POST|GET /llm/@{prefix}/{path}` - Proxy to the provider with that prefix
 - `GET /llm/v1/models` - Models of all providers, as `<prefix>/<model>`
 
 ### Providers and routing
@@ -86,7 +87,39 @@ mode: the old `LLM_PROXY_TARGET_URL` / `LLM_PROXY_AUTHORIZATION_TYPE` / `LLM_PRO
 settings are ignored (a startup warning lists any still set). `LLM_LLM_HUB_ENABLED`
 is a deprecated alias of `LLM_PROXY_ENABLED`.
 
-The `model` in the request body picks the provider:
+A request can pin a provider explicitly. This is the way to reach endpoints that
+carry no model, such as files, fine-tuning jobs and batches:
+
+- **Path:** `/llm/@<prefix>/v1/...`, e.g. `/llm/@openai/v1/files`. With an SDK, set
+  `base_url=".../llm/@openai/v1"` and every call (uploads, job status, completions)
+  goes to that provider.
+- **Header:** `X-Provider: <prefix>` on a normal `/llm/v1/...` path. An unknown
+  prefix gets 404; a header that conflicts with the path prefix gets 400. The
+  header is not forwarded upstream. It also applies to `/llm/v1/models` (the
+  provider's own list, unprefixed) and `/llm/version`.
+
+A pin is a hard guarantee: the request never leaves that provider, which keeps
+files, fine-tuned models and billing on one upstream. Model routing is skipped:
+
+- An alias uses only its `target`/`fallback` entries that resolve to the pinned
+  provider (the fallback still applies if both are there). Entries on other
+  providers are ignored, so the same alias can fail when pinned where it would
+  fall back to another provider unpinned.
+- An alias with no entry on the pinned provider, or any other name, is sent as is,
+  with only the provider's own `<prefix>/` stripped. Alias names may be real model
+  names upstream.
+The `@` marks a provider: upstream API paths never start with it, so `/llm/openai/...`
+(no `@`) is still an ordinary upstream path for the default provider. An unknown
+`@<prefix>` gets 404. Prefixes can't contain `/`.
+
+```python
+client = OpenAI(base_url="http://yallmp/ai/llm/@openai/v1", api_key="...")
+f = client.files.create(file=open("train.jsonl", "rb"), purpose="fine-tune")
+job = client.fine_tuning.jobs.create(training_file=f.id, model="gpt-4o-mini")
+client.fine_tuning.jobs.retrieve(job.id)
+```
+
+Without a pin, the `model` in the request body picks the provider:
 
 1. An alias from `aliases.json`, resolved to its `target` (and `fallback` on error).
 2. `<prefix>/<model>` with a known prefix: that provider, prefix stripped.
@@ -94,7 +127,7 @@ The `model` in the request body picks the provider:
 4. Anything else: the provider with `"default": true`, name unchanged.
    Without a default provider such requests get 404.
 
-Requests without a model (GET, multipart uploads) go to the default provider.
+Unpinned requests without a model (GET, multipart uploads) go to the default provider.
 
 ```json
 {

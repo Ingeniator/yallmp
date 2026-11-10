@@ -26,6 +26,9 @@ from app.services.tracing import trace_proxy_request
 
 logger = setup_logging()
 
+# Request header that pins a provider by prefix; never forwarded upstream.
+PROVIDER_HEADER = "X-Provider"
+
 # HTTP success status codes — reused across the module
 _SUCCESS_STATUS_CODES = frozenset(range(200, 209)) | {226}
 
@@ -1034,10 +1037,12 @@ def _strip_model_prefix(body: bytes, original_model: str, stripped_model: str) -
 
 
 def _passthrough_drop(config) -> frozenset[str]:
-    """Client headers to strip for PASSTHROUGH providers: the ones copied into auth."""
-    if config.auth.type != AuthType.PASSTHROUGH:
-        return frozenset()
-    return frozenset(config.auth.passthrough_source_headers())
+    """Client headers never forwarded: the provider pin, plus for PASSTHROUGH
+    providers the headers already copied into auth."""
+    drop = {PROVIDER_HEADER.lower()}
+    if config.auth.type == AuthType.PASSTHROUGH:
+        drop |= config.auth.passthrough_source_headers()
+    return frozenset(drop)
 
 
 def check_provider_access(
