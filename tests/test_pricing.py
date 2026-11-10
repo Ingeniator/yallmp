@@ -335,3 +335,118 @@ def test_handler_skips_cost_when_get_cost_returns_none(comp_c, prompt_c, total_c
     handler.on_llm_end(response)
 
     cost_counter.labels.assert_not_called()
+
+
+# ── find_cost (provider unknown) ──────────────────────────────────────────────
+
+
+def _cache_with(prices: dict[str, dict[str, tuple[float, float]]], currencies=None):
+    from app.services.pricing import PricingCache
+
+    pc = PricingCache({})
+    pc._cache = {
+        prefix: {
+            model: PricingInfo(input_cost_per_token=i, output_cost_per_token=o)
+            for model, (i, o) in models.items()
+        }
+        for prefix, models in prices.items()
+    }
+    pc._currencies = currencies or {}
+    return pc
+
+
+def test_find_cost_single_provider():
+    pc = _cache_with({"a": {"m": (1.0, 2.0)}, "b": {"other": (9.0, 9.0)}})
+    prefix, currency, cost = pc.find_cost("m", 10, 10)
+    assert (prefix, currency, cost.total) == ("a", "USD", 30.0)
+
+
+def test_find_cost_conflicting_prices_returns_none():
+    pc = _cache_with({"cheap": {"gpt-4o": (1e-9, 1e-9)}, "real": {"gpt-4o": (2.5e-6, 1e-5)}})
+    assert pc.find_cost("gpt-4o", 1000, 1000) is None
+
+
+def test_find_cost_same_price_different_currency_returns_none():
+    pc = _cache_with(
+        {"a": {"m": (1.0, 1.0)}, "b": {"m": (1.0, 1.0)}},
+        currencies={"a": "USD", "b": "RUB"},
+    )
+    assert pc.find_cost("m", 1, 1) is None
+
+
+def test_find_cost_identical_prices_is_not_ambiguous():
+    pc = _cache_with({"a": {"m": (1.0, 2.0)}, "b": {"m": (1.0, 2.0)}})
+    found = pc.find_cost("m", 1, 1)
+    assert found is not None and found[2].total == 3.0
+
+
+def test_find_cost_prefixed_model_uses_named_provider_only():
+    pc = _cache_with({"cheap": {"gpt-4o": (1e-9, 1e-9)}, "real": {"gpt-4o": (2.5e-6, 1e-5)}})
+    prefix, _, cost = pc.find_cost("real/gpt-4o", 1000, 1000)
+    assert prefix == "real"
+    assert cost.total == pytest.approx(0.0125)
+
+
+def test_find_cost_prefixed_model_missing_at_named_provider_returns_none():
+    pc = _cache_with({"cheap": {"gpt-4o": (1e-9, 1e-9)}, "real": {"other": (1.0, 1.0)}})
+    assert pc.find_cost("real/gpt-4o", 1000, 1000) is None
+
+
+def test_find_cost_unknown_model_returns_none():
+    pc = _cache_with({"a": {"m": (1.0, 1.0)}})
+    assert pc.find_cost("nope", 1, 1) is None
+
+
+# ── find_cost with hub routing ────────────────────────────────────────────────
+
+
+def _routed_cache(default="dflt"):
+    """Cache wired to real LlmHub.resolve_model routing."""
+    from app.services.llm_hub import LlmHub
+
+    hub = LlmHub()
+    for prefix, models in (("dflt", []), ("other", ["listed-model"])):
+        provider = MagicMock()
+        provider.config = LlmProviderConfig(prefix=prefix, base_url="http://x", models=models)
+        hub.providers[prefix] = provider
+    hub.default_prefix = default
+
+    def resolve(model):
+        r = hub.resolve_model(model)
+        return r[0].config.prefix if r else None
+
+    pc = _cache_with(
+        {
+            "dflt": {"gpt-4o": (2.5e-6, 1e-5)},
+            "other": {"gpt-4o": (1e-9, 1e-9), "listed-model": (1.0, 1.0)},
+        },
+        currencies={"dflt": "USD", "other": "RUB"},
+    )
+    pc._resolve_prefix = resolve
+    return pc
+
+
+def test_find_cost_unprefixed_model_uses_default_provider_price():
+    prefix, currency, cost = _routed_cache().find_cost("gpt-4o", 1000, 1000)
+    assert (prefix, currency) == ("dflt", "USD")
+    assert cost.total == pytest.approx(0.0125)
+
+
+def test_find_cost_models_list_wins_over_default():
+    prefix, currency, cost = _routed_cache().find_cost("listed-model", 1, 1)
+    assert (prefix, currency, cost.total) == ("other", "RUB", 2.0)
+
+
+def test_find_cost_prefixed_model_routes_to_named_provider():
+    prefix, _, cost = _routed_cache().find_cost("other/gpt-4o", 1000, 1000)
+    assert prefix == "other"
+    assert cost.total == pytest.approx(2e-6)
+
+
+def test_find_cost_routed_provider_without_price_does_not_fall_back():
+    # routed to dflt, which has no price for it; other providers are not used
+    assert _routed_cache().find_cost("unpriced", 1, 1) is None
+
+
+def test_find_cost_no_default_provider_returns_none():
+    assert _routed_cache(default=None).find_cost("gpt-4o", 1, 1) is None

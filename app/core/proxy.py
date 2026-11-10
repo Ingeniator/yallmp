@@ -8,6 +8,7 @@ from httpx import (
     Response as HTTPXResponse,
     AsyncByteStream,
 )
+import codecs
 import random
 import time
 import asyncio
@@ -408,6 +409,76 @@ def _detect_streaming(method: str, body: bytes) -> bool:
     return False
 
 
+def _ensure_stream_usage(body: bytes, path: str) -> tuple[bytes, bool]:
+    """Ask upstream for token usage on streaming chat completions.
+
+    Without ``stream_options.include_usage`` OpenAI-compatible providers send no
+    usage in the stream, so the request cannot be priced or charged. Returns
+    ``(body, injected)``; ``injected`` is True when we turned usage on and the
+    client did not ask for it, so the extra usage-only chunk must be hidden
+    from the client.
+    """
+    if "chat/completions" not in path or not body:
+        return body, False
+    try:
+        data = json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return body, False
+    if not isinstance(data, dict) or data.get("stream") is not True:
+        return body, False
+    opts = data.get("stream_options")
+    if not isinstance(opts, dict):
+        opts = {}
+    if opts.get("include_usage") is True:
+        return body, False
+    data["stream_options"] = {**opts, "include_usage": True}
+    return json.dumps(data).encode("utf-8"), True
+
+
+def _is_usage_only_event(event: str) -> bool:
+    """True for the trailing SSE chunk that include_usage adds: no choices, has usage."""
+    for line in event.splitlines():
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        payload = line[len("data:") :].strip()
+        if payload == "[DONE]":
+            return False
+        try:
+            data = json.loads(payload)
+        except json.JSONDecodeError:
+            return False
+        return (
+            isinstance(data, dict)
+            and not data.get("choices")
+            and data.get("usage") is not None
+        )
+    return False
+
+
+_SSE_EVENT_SEP = re.compile(r"\r?\n\r?\n")
+
+
+async def _drop_usage_only_events(
+    chunks: AsyncIterator[bytes],
+) -> AsyncIterator[bytes]:
+    """Re-frame an SSE byte stream into events and drop usage-only chunks."""
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    buffer = ""
+    async for chunk in chunks:
+        buffer += decoder.decode(chunk)
+        while True:
+            match = _SSE_EVENT_SEP.search(buffer)
+            if not match:
+                break
+            event, buffer = buffer[: match.end()], buffer[match.end() :]
+            if not _is_usage_only_event(event):
+                yield event.encode("utf-8")
+    buffer += decoder.decode(b"", final=True)
+    if buffer and not _is_usage_only_event(buffer):
+        yield buffer.encode("utf-8")
+
+
 def _parse_tags_header(raw: str | None) -> list[str] | None:
     if not raw:
         return None
@@ -705,6 +776,7 @@ async def _do_proxy_request(
     max_retries: int | None = None,
     base_delay: float | None = None,
     backoff_factor: float | None = None,
+    hide_usage_chunk: bool = False,
 ) -> JSONResponse | StreamingResponse:
     """Core proxy logic: streaming or retried request, then metrics and tracing."""
 
@@ -719,6 +791,7 @@ async def _do_proxy_request(
             provider_prefix=provider_prefix,
             provider_currency=provider_currency,
             pricing_cache=pricing_cache,
+            hide_usage_chunk=hide_usage_chunk,
         )
 
     start_time = time.time()
@@ -773,8 +846,13 @@ async def _handle_streaming_request(
     provider_prefix: str | None = None,
     provider_currency: str | None = None,
     pricing_cache=None,
+    hide_usage_chunk: bool = False,
 ) -> StreamingResponse | JSONResponse:
-    """Handle a streaming proxy request, forwarding SSE chunks from upstream."""
+    """Handle a streaming proxy request, forwarding SSE chunks from upstream.
+
+    With ``hide_usage_chunk`` the usage-only chunk (requested by the proxy, not
+    the client) is still recorded for billing but not forwarded to the client.
+    """
     start_time = time.time()
     try:
         upstream_response = await client.send(
@@ -808,14 +886,23 @@ async def _handle_streaming_request(
             content=error_data, status_code=upstream_response.status_code
         )
 
+    collected_chunks: list[str] = []
+    first_chunk_time: float | None = None
+
+    async def _collect():
+        nonlocal first_chunk_time
+        async for chunk in upstream_response.aiter_bytes():
+            if first_chunk_time is None:
+                first_chunk_time = time.time()
+            collected_chunks.append(chunk.decode("utf-8", errors="replace"))
+            yield chunk
+
     async def _stream_generator():
-        collected_chunks: list[str] = []
-        first_chunk_time: float | None = None
         try:
-            async for chunk in upstream_response.aiter_bytes():
-                if first_chunk_time is None:
-                    first_chunk_time = time.time()
-                collected_chunks.append(chunk.decode("utf-8", errors="replace"))
+            source = _collect()
+            if hide_usage_chunk:
+                source = _drop_usage_only_events(source)
+            async for chunk in source:
                 yield chunk
         finally:
             await upstream_response.aclose()
@@ -1107,6 +1194,9 @@ async def proxy_request_to_provider(
 
         body = await request.body()
         body = _strip_model_prefix(body, original_model, stripped_model)
+        hide_usage_chunk = False
+        if config.inject_stream_usage:
+            body, hide_usage_chunk = _ensure_stream_usage(body, path)
 
         return await _do_proxy_request(
             client=provider.client,
@@ -1123,6 +1213,7 @@ async def proxy_request_to_provider(
             max_retries=config.max_retries,
             base_delay=config.base_delay,
             backoff_factor=config.backoff_factor,
+            hide_usage_chunk=hide_usage_chunk,
         )
 
     except Exception as e:

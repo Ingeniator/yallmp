@@ -7,6 +7,7 @@ from pathlib import Path
 import yaml
 
 from app.core.logging_config import setup_logging
+from app.core.security import sanitize_group_id
 
 logger = setup_logging()
 
@@ -59,9 +60,13 @@ async def charge(redis, limits: dict, group_id: str, cost: float) -> str:
     """
     Increment Redis counters for group and user after a successful request.
     Returns a warning string if approaching limit, else empty string.
+
+    ``group_id`` is sanitized the same way BillingMiddleware sanitizes it, so the
+    keys charged here are the keys the pre-request limit check reads.
     """
     if not cost or cost <= 0:
         return ""
+    group_id = sanitize_group_id(group_id)
     org = group_id.split("/")[0]
     tier = get_tier(limits, org)
     pk = period_key(tier["period"])

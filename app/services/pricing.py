@@ -1,5 +1,6 @@
 import asyncio
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import httpx
@@ -28,7 +29,16 @@ _DEFAULT_TTL = 86400  # 24 hours
 class PricingCache:
     """Fetches and caches per-model pricing for LLM providers."""
 
-    def __init__(self, providers: dict, ttl: int = _DEFAULT_TTL):
+    def __init__(
+        self,
+        providers: dict,
+        ttl: int = _DEFAULT_TTL,
+        resolve_prefix: Callable[[str], str | None] | None = None,
+    ):
+        # model name -> prefix of the provider the proxy routes it to
+        # (LlmHub routing). Lets find_cost price a model at the provider that
+        # actually served it, e.g. the default provider for unprefixed models.
+        self._resolve_prefix = resolve_prefix
         # provider -> model -> PricingInfo
         self._cache: dict[str, dict[str, PricingInfo]] = {}
         # prefix -> currency (for find_cost lookups)
@@ -54,6 +64,28 @@ class PricingCache:
             except asyncio.CancelledError:
                 pass
 
+    def _lookup(self, provider_prefix: str, model_name: str) -> PricingInfo | None:
+        """Pricing for *model_name* at *provider_prefix*, or None. Does not log."""
+        models = self._cache.get(provider_prefix)
+        if not models:
+            return None
+        pricing = models.get(model_name)
+        if pricing is None:
+            model_name_list = model_name.split("/")
+            if len(model_name_list) > 1:
+                pricing = models.get(model_name_list[1])
+        return pricing
+
+    @staticmethod
+    def _breakdown(
+        pricing: PricingInfo, prompt_tokens: int, completion_tokens: int
+    ) -> CostBreakdown:
+        input_cost = prompt_tokens * pricing.input_cost_per_token
+        output_cost = completion_tokens * pricing.output_cost_per_token
+        return CostBreakdown(
+            input=input_cost, output=output_cost, total=input_cost + output_cost
+        )
+
     def get_cost(
         self,
         provider_prefix: str,
@@ -61,17 +93,10 @@ class PricingCache:
         prompt_tokens: int,
         completion_tokens: int,
     ) -> CostBreakdown | None:
-        models = self._cache.get(provider_prefix)
-        if not models:
+        if not self._cache.get(provider_prefix):
             logger.warning("get_cost: no cache for provider", provider=provider_prefix)
             return None
-        pricing = models.get(model_name)
-        if pricing is None:
-            model_name_list = model_name.split("/")
-            if len(model_name_list) > 1:
-                model_name = model_name_list[1]
-                pricing = models.get(model_name)
-
+        pricing = self._lookup(provider_prefix, model_name)
         if not pricing:
             logger.error(
                 "get_cost: model not found in pricing",
@@ -79,11 +104,7 @@ class PricingCache:
                 provider=provider_prefix,
             )
             return None
-        input_cost = prompt_tokens * pricing.input_cost_per_token
-        output_cost = completion_tokens * pricing.output_cost_per_token
-        return CostBreakdown(
-            input=input_cost, output=output_cost, total=input_cost + output_cost
-        )
+        return self._breakdown(pricing, prompt_tokens, completion_tokens)
 
     def find_cost(
         self,
@@ -91,13 +112,65 @@ class PricingCache:
         prompt_tokens: int,
         completion_tokens: int,
     ) -> tuple[str, str, CostBreakdown] | None:
-        """Search all providers for pricing and return (prefix, currency, cost) or None."""
-        for prefix in self._cache:
-            cost = self.get_cost(prefix, model_name, prompt_tokens, completion_tokens)
-            if cost is not None:
-                currency = self._currencies.get(prefix, "USD")
-                return prefix, currency, cost
-        return None
+        """Price a model whose provider is not known; return (prefix, currency, cost) or None.
+
+        With a ``resolve_prefix`` routing function, the model is priced only at
+        the provider it routes to (``prefix/model`` -> that provider, a
+        ``models`` list match, else the default provider), never at another
+        provider's rate.
+
+        Without one: a ``<prefix>/model`` name naming a cached provider is priced
+        by that provider only. Otherwise the model must be priced by exactly one
+        provider, or identically (same prices and currency) by all providers
+        that list it. Conflicting prices are ambiguous: we return None rather
+        than charge another provider's rate.
+        """
+        if self._resolve_prefix is not None:
+            prefix = self._resolve_prefix(model_name)
+            pricing = self._lookup(prefix, model_name) if prefix else None
+            if pricing is None:
+                logger.warning(
+                    "find_cost: no pricing at routed provider",
+                    model=model_name,
+                    provider=prefix,
+                )
+                return None
+            return (
+                prefix,
+                self._currencies.get(prefix, "USD"),
+                self._breakdown(pricing, prompt_tokens, completion_tokens),
+            )
+
+        head = model_name.split("/", 1)[0]
+        if "/" in model_name and head in self._cache:
+            candidates = [head]
+        else:
+            candidates = list(self._cache)
+
+        matches = [
+            (prefix, self._currencies.get(prefix, "USD"), pricing)
+            for prefix in candidates
+            if (pricing := self._lookup(prefix, model_name)) is not None
+        ]
+        if not matches:
+            return None
+
+        distinct = {
+            (cur, p.input_cost_per_token, p.output_cost_per_token)
+            for _, cur, p in matches
+        }
+        if len(distinct) > 1:
+            logger.warning(
+                "find_cost: ambiguous pricing, not charging",
+                model=model_name,
+                providers=[prefix for prefix, _, _ in matches],
+            )
+            return None
+
+        prefix, currency, pricing = matches[0]
+        return prefix, currency, self._breakdown(
+            pricing, prompt_tokens, completion_tokens
+        )
 
     # ------------------------------------------------------------------
     # Internals

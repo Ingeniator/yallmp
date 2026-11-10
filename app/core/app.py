@@ -47,7 +47,11 @@ async def lifespan(app: FastAPI):
     if llm_hub.providers:
         from app.services.pricing import PricingCache
 
-        pricing_cache = PricingCache(llm_hub.providers)
+        def _routed_prefix(model: str) -> str | None:
+            resolved = llm_hub.resolve_model(model)
+            return resolved[0].config.prefix if resolved else None
+
+        pricing_cache = PricingCache(llm_hub.providers, resolve_prefix=_routed_prefix)
         await pricing_cache.startup()
 
     app.state.pricing_cache = pricing_cache

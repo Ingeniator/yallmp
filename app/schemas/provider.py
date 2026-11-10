@@ -101,6 +101,10 @@ class LlmProviderConfig(BaseModel):
     currency: str = "USD"
     pricing_endpoint: str | None = None
     pricing: dict[str, PricingInfo] | None = None
+    # Force stream_options.include_usage on streaming chat completions so the
+    # final chunk carries token usage for billing. Disable for providers that
+    # reject unknown request fields.
+    inject_stream_usage: bool = True
     # X-Group-Id values allowed to use this provider. An entry matches the exact
     # group_id and its nested ids ("org" matches "org" and "org/user").
     # None or empty: open to everyone.
