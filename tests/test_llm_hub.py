@@ -628,3 +628,19 @@ def test_load_providers_allows_former_reserved_prefixes(tmp_path):
     h = LlmHub()
     h.load_providers(str(tmp_path))
     assert "v1" in h.providers
+
+
+def test_provider_circuit_breaker_uses_provider_settings():
+    provider = LlmProvider(LlmProviderConfig(
+        prefix="p", base_url="http://p", failure_threshold=3, recovery_time=7, window_size=11,
+    ))
+    cb = provider.circuit_breaker
+    assert (cb.failure_threshold, cb.recovery_time, cb.window_size) == (3, 7, 11)
+
+
+def test_provider_circuit_breaker_defaults_to_global_settings(monkeypatch):
+    import app.core.proxy as proxy_mod
+
+    monkeypatch.setattr(proxy_mod.settings, "proxy_failure_threshold", 5)
+    provider = LlmProvider(LlmProviderConfig(prefix="p", base_url="http://p"))
+    assert provider.circuit_breaker.failure_threshold == 5

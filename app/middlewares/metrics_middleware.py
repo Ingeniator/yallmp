@@ -7,8 +7,18 @@ import os
 import time
 from app.core.logging_config import setup_logging
 
-# Normalize dynamic path segments (UUIDs, numeric IDs) to prevent unbounded label cardinality
-_PATH_ID_RE = re.compile(r'/[0-9a-f]{8,}(?:-[0-9a-f]{4,}){0,4}|/\d+')
+# Normalize dynamic path segments to prevent unbounded label cardinality: UUIDs and
+# hex ids, numeric ids, provider object ids ("file-abc123...", "ftjob-...",
+# "batch_..."; the random part has a digit, so "chat-completions" or "fine_tuning"
+# stay) and fine-tuned model names ("ft:gpt-4o-mini:org::id").
+_PATH_ID_RE = re.compile(
+    r"/(?:"
+    r"[0-9a-f]{8,}(?:-[0-9a-f]{4,}){0,4}"
+    r"|\d+"
+    r"|[A-Za-z]+[-_](?=[A-Za-z0-9]*\d)[A-Za-z0-9]{8,}"
+    r"|ft:[^/]+"
+    r")(?=/|$)"
+)
 
 # Request count metric
 REQUEST_COUNT = Counter(

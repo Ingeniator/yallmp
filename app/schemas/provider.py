@@ -90,9 +90,11 @@ class LlmProviderConfig(BaseModel):
     models: list[str] = Field(default_factory=list)
     verify_ssl: bool = True
     timeout: TimeoutConfig = Field(default_factory=TimeoutConfig)
-    failure_threshold: int = 0
-    recovery_time: int = 30
-    window_size: int = 60
+    # Circuit breaker; None uses the global proxy_failure_threshold /
+    # proxy_recovery_time / proxy_window_size settings.
+    failure_threshold: int | None = None
+    recovery_time: int | None = None
+    window_size: int | None = None
     max_retries: int = 5
     base_delay: float = 0.5
     backoff_factor: float = 2.0

@@ -419,6 +419,41 @@ def test_llm_version_route_header_unknown_is_404(hub_dir):
     mock_version.assert_not_awaited()
 
 
+@pytest.mark.parametrize("status", [500, 502, 503, 523, 429, 404])
+def test_llm_alias_falls_back_on_provider_trouble(hub_dir, status):
+    mock_proxy = AsyncMock(side_effect=[
+        JSONResponse(content={}, status_code=status),
+        JSONResponse(content={"ok": True}, status_code=200),
+    ])
+    patches, _ = _proxy_client(mock_proxy=mock_proxy)
+    resp = _call(patches, "POST", "/llm/v1/chat/completions", json={"model": "both"})
+    assert resp.status_code == 200
+    assert mock_proxy.await_count == 2
+
+
+@pytest.mark.parametrize("status", [400, 401, 413, 422])
+def test_llm_alias_does_not_fall_back_on_caller_errors(hub_dir, status):
+    mock_proxy = AsyncMock(return_value=JSONResponse(content={"e": 1}, status_code=status))
+    patches, _ = _proxy_client(mock_proxy=mock_proxy)
+    resp = _call(patches, "POST", "/llm/v1/chat/completions", json={"model": "both"})
+    assert resp.status_code == status
+    assert mock_proxy.await_count == 1
+
+
+def test_llm_alias_skips_fallback_caller_cannot_use(hub_dir):
+    """Fallback outside the caller's allow_list: return the primary's error, not 403."""
+    (hub_dir / "local.json").write_text(json.dumps({
+        "prefix": "local", "base_url": "http://local", "default": True,
+        "allow_list": ["other-org"],
+    }))
+    mock_proxy = AsyncMock(return_value=JSONResponse(content={"e": 1}, status_code=502))
+    patches, _ = _proxy_client(mock_proxy=mock_proxy)
+    resp = _call(patches, "POST", "/llm/v1/chat/completions", json={"model": "both"},
+                 headers={"X-Group-Id": "my-org"})
+    assert resp.status_code == 502
+    assert mock_proxy.await_count == 1
+
+
 def test_health_proxy_degraded_without_providers(tmp_path, monkeypatch):
     import app.services.llm_hub as llm_hub_module
 

@@ -48,7 +48,7 @@ def test_provider_config_minimal():
     assert config.verify_ssl is True
     assert config.auth.type == AuthType.NONE
     assert config.timeout.connect == 10
-    assert config.failure_threshold == 0
+    assert config.failure_threshold is None  # global proxy_failure_threshold
     assert config.max_retries == 5
     assert config.base_delay == 0.5
     assert config.backoff_factor == 2.0

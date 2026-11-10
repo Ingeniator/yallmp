@@ -76,7 +76,11 @@ class LlmProvider:
     def __init__(self, config: LlmProviderConfig):
         self.config = config
         self.client: AsyncClient | None = None
-        self.circuit_breaker = CircuitBreaker()
+        self.circuit_breaker = CircuitBreaker(
+            failure_threshold=config.failure_threshold,
+            recovery_time=config.recovery_time,
+            window_size=config.window_size,
+        )
         self.token_manager: OIDCTokenManager | None = None
 
     async def startup(self):

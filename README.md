@@ -121,7 +121,9 @@ client.fine_tuning.jobs.retrieve(job.id)
 
 Without a pin, the `model` in the request body picks the provider:
 
-1. An alias from `aliases.json`, resolved to its `target` (and `fallback` on error).
+1. An alias from `aliases.json`, resolved to its `target`. Its `fallback` is tried
+   only on provider trouble (5xx, 429, 404), not on the caller's own 4xx, and is
+   skipped when the caller isn't in the fallback provider's `allow_list`.
 2. `<prefix>/<model>` with a known prefix: that provider, prefix stripped.
 3. A name in some provider's `models` list: that provider, name unchanged.
 4. Anything else: the provider with `"default": true`, name unchanged.

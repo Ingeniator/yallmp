@@ -555,6 +555,15 @@ def create_app() -> FastAPI:
                 },
             )
 
+        def _should_fall_back(response) -> bool:
+            """Provider trouble worth retrying elsewhere: 5xx (incl. the proxy's own
+            connection-failure 523 and open-breaker 503), 429 and 404 (model not
+            found). Other 4xx are the caller's own error and are returned as is."""
+            if not isinstance(response, JSONResponse):
+                return False
+            code = response.status_code
+            return code >= 500 or code in (404, 429)
+
         def _header_pin(request: Request):
             """(provider pinned by X-Provider or None, error response or None)."""
             prefix = request.headers.get(PROVIDER_HEADER, "").strip()
@@ -660,7 +669,7 @@ def create_app() -> FastAPI:
                     model = ""
 
             async def via_alias(candidates):
-                """Try the alias's resolved entries in order; fall back on upstream errors."""
+                """Try the alias's resolved entries in order; fall back on provider trouble."""
                 primary, *rest = candidates
                 # Access/credential errors are the caller's: don't reroute them.
                 p_headers = await primary[0].get_auth_headers(request.headers)
@@ -668,9 +677,14 @@ def create_app() -> FastAPI:
                 if denied is not None:
                     return denied
                 response = await forward(primary[0], model, primary[1], path)
-                if rest and isinstance(response, JSONResponse) and response.status_code >= 400:
-                    response = await forward(rest[0][0], model, rest[0][1], path)
-                return response
+                if not rest or not _should_fall_back(response):
+                    return response
+                fb_provider, fb_model = rest[0]
+                # A fallback the caller can't use must not hide the primary's error.
+                fb_headers = await fb_provider.get_auth_headers(request.headers)
+                if check_provider_access(fb_provider.config, request, fb_headers) is not None:
+                    return response
+                return await forward(fb_provider, model, fb_model, path)
 
             alias = llm_hub.resolve_alias(model) if model else None
 
