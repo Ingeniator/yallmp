@@ -221,3 +221,105 @@ async def test_streaming_injection_can_be_disabled_per_provider():
     )
     assert "stream_options" not in sent
     assert client_out == _CONTENT + _USAGE + _DONE  # passthrough untouched
+
+
+# ── 3. Per-currency counters and limits ───────────────────────────────────────
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+_CUR_LIMITS = {
+    "tiers": {
+        "tier1": {
+            "period": "month", "group_limit": 100.0, "user_limit": 10.0, "alert_threshold": 0.8,
+            "currency_limits": {"RUB": {"group_limit": 10000.0, "user_limit": 1000.0}},
+        }
+    },
+    "orgs": {"default": "tier1"},
+}
+
+
+@pytest.mark.asyncio
+async def test_charge_keeps_usd_keys_and_separates_rub():
+    redis = MemRedis()
+    pk = period_key("month")
+    await charge(redis, _CUR_LIMITS, "acme/alice", 1.0)  # default USD
+    await charge(redis, _CUR_LIMITS, "acme/alice", 2.0, currency="USD")
+    await charge(redis, _CUR_LIMITS, "acme/alice", 300.0, currency="rub")
+    assert redis.data == {
+        f"billing:group:acme:{pk}": 3.0,
+        f"billing:user:acme/alice:{pk}": 3.0,
+        f"billing:group:acme:{pk}:RUB": 300.0,
+        f"billing:user:acme/alice:{pk}:RUB": 300.0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_charge_warning_uses_currency_limit():
+    redis = MemRedis()
+    # 90 RUB is far below the 10000 RUB limit (it would trip the 100 USD one)
+    assert await charge(redis, _CUR_LIMITS, "acme", 90.0, currency="RUB") == ""
+    assert await charge(redis, _CUR_LIMITS, "acme", 8000.0, currency="RUB") == "approaching group limit"
+
+
+@pytest.mark.asyncio
+async def test_charge_unlimited_currency_is_counted_without_warning():
+    redis = MemRedis()
+    assert await charge(redis, _CUR_LIMITS, "acme", 1e9, currency="LMSTUDIO") == ""
+    assert redis.data[f"billing:group:acme:{period_key('month')}:LMSTUDIO"] == 1e9
+
+
+def _middleware_client(store: dict):
+    from app.middlewares.billing_middleware import _LLM_PATH_PREFIX, BillingMiddleware
+
+    app = FastAPI()
+    app.add_middleware(BillingMiddleware)
+
+    @app.post(f"{_LLM_PATH_PREFIX}v1/chat/completions")
+    async def ok():
+        return {"ok": True}
+
+    app.state.billing_redis = MemRedis()
+    app.state.billing_redis.data = store
+    app.state.billing_limits = _CUR_LIMITS
+    return TestClient(app)
+
+
+def _post(client):
+    with patch("app.middlewares.billing_middleware.settings") as s:
+        s.billing_enabled = True
+        from app.middlewares.billing_middleware import _LLM_PATH_PREFIX
+
+        return client.post(
+            f"{_LLM_PATH_PREFIX}v1/chat/completions", headers={"X-Group-ID": "acme/alice"}
+        )
+
+
+def test_middleware_rub_spend_does_not_count_against_usd_limit():
+    pk = period_key("month")
+    # 500 RUB would exceed the 100 USD group limit if currencies were mixed
+    resp = _post(_middleware_client({f"billing:group:acme:{pk}:RUB": 500.0}))
+    assert resp.status_code == 200
+    assert "x-billing-warning" not in resp.headers
+
+
+def test_middleware_blocks_on_rub_limit():
+    pk = period_key("month")
+    resp = _post(_middleware_client({f"billing:user:acme/alice:{pk}:RUB": 1000.0}))
+    assert resp.status_code == 429
+    assert resp.json() == {"error": "user spend limit reached", "spent": 1000.0,
+                           "limit": 1000.0, "currency": "RUB"}
+
+
+def test_middleware_usd_block_body_unchanged():
+    pk = period_key("month")
+    resp = _post(_middleware_client({f"billing:group:acme:{pk}": 100.0}))
+    assert resp.status_code == 429
+    assert resp.json() == {"error": "group spend limit reached", "spent": 100.0, "limit": 100.0}
+
+
+def test_middleware_rub_warning_header():
+    pk = period_key("month")
+    resp = _post(_middleware_client({f"billing:group:acme:{pk}:RUB": 8500.0}))
+    assert resp.status_code == 200
+    assert resp.headers["x-billing-warning"] == "approaching group limit (RUB)"

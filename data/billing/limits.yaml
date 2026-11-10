@@ -4,6 +4,11 @@ tiers:
     group_limit: 100.0
     user_limit: 10.0
     alert_threshold: 0.8
+    # group_limit / user_limit above are USD. Other currencies (e.g. RUB from
+    # GigaChat) are counted separately; limit them here. Without an entry a
+    # currency is counted but not limited.
+    # currency_limits:
+    #   RUB: {group_limit: 10000.0, user_limit: 1000.0}
   tier_unlimited:
     period: month
     group_limit: 999999.0

@@ -54,11 +54,76 @@ def period_ttl(period: str) -> int:
     end = now.replace(day=last_day, hour=23, minute=59, second=59)
     return max(int((end - now).total_seconds()), 60)
 
+# ── Currencies ────────────────────────────────────────────────────────────────
+#
+# USD is the default currency: its counters keep the original key names
+# (billing:group:{org}:{period}) and its limits are the tier's top-level
+# group_limit / user_limit. Every other currency (e.g. RUB for GigaChat) is
+# counted separately under the same key with a ":{CURRENCY}" suffix and limited
+# by the tier's optional ``currency_limits`` entry:
+#
+#   tier1:
+#     group_limit: 100.0        # USD
+#     user_limit: 10.0          # USD
+#     currency_limits:
+#       RUB: {group_limit: 10000.0, user_limit: 1000.0}
+#
+# A currency without a currency_limits entry is counted but not limited.
+
+DEFAULT_CURRENCY = "USD"
+
+
+def normalize_currency(currency: str | None) -> str:
+    return (currency or DEFAULT_CURRENCY).strip().upper() or DEFAULT_CURRENCY
+
+
+def _suffix(currency: str | None) -> str:
+    cur = normalize_currency(currency)
+    return "" if cur == DEFAULT_CURRENCY else f":{cur}"
+
+
+def group_key(org: str, pk: str, currency: str | None = None) -> str:
+    return f"billing:group:{org}:{pk}{_suffix(currency)}"
+
+
+def user_key(group_id: str, pk: str, currency: str | None = None) -> str:
+    return f"billing:user:{group_id}:{pk}{_suffix(currency)}"
+
+
+def currency_limits(tier: dict, currency: str | None) -> dict | None:
+    """Limits for *currency* within *tier*, or None when it is not limited."""
+    cur = normalize_currency(currency)
+    if cur == DEFAULT_CURRENCY:
+        return tier
+    extra = (tier.get("currency_limits") or {}).get(cur)
+    if not extra:
+        return None
+    return {
+        "group_limit": float(extra.get("group_limit", float("inf"))),
+        "user_limit": float(extra.get("user_limit", float("inf"))),
+        "alert_threshold": extra.get("alert_threshold", tier.get("alert_threshold", 0.8)),
+    }
+
+
+def limited_currencies(tier: dict) -> list[str]:
+    """USD first, then every currency with configured limits."""
+    others = sorted(
+        normalize_currency(c) for c in (tier.get("currency_limits") or {})
+    )
+    return [DEFAULT_CURRENCY] + [c for c in others if c != DEFAULT_CURRENCY]
+
 # ── Hot-path helpers ──────────────────────────────────────────────────────────
 
-async def charge(redis, limits: dict, group_id: str, cost: float) -> str:
+async def charge(
+    redis,
+    limits: dict,
+    group_id: str,
+    cost: float,
+    currency: str | None = DEFAULT_CURRENCY,
+) -> str:
     """
     Increment Redis counters for group and user after a successful request.
+    Costs are counted per currency (see "Currencies" above); USD is the default.
     Returns a warning string if approaching limit, else empty string.
 
     ``group_id`` is sanitized the same way BillingMiddleware sanitizes it, so the
@@ -73,17 +138,17 @@ async def charge(redis, limits: dict, group_id: str, cost: float) -> str:
     ttl = period_ttl(tier["period"])
 
     try:
-        group_key = f"billing:group:{org}:{pk}"
-        group_total = float(await redis.incrbyfloat(group_key, cost))
-        await redis.expire(group_key, ttl, xx=False)  # set TTL only if key is new
+        gkey = group_key(org, pk, currency)
+        group_total = float(await redis.incrbyfloat(gkey, cost))
+        await redis.expire(gkey, ttl, xx=False)  # set TTL only if key is new
 
         if "/" in group_id:
-            user_key = f"billing:user:{group_id}:{pk}"
-            await redis.incrbyfloat(user_key, cost)
-            await redis.expire(user_key, ttl, xx=False)
+            ukey = user_key(group_id, pk, currency)
+            await redis.incrbyfloat(ukey, cost)
+            await redis.expire(ukey, ttl, xx=False)
 
-        threshold = tier.get("alert_threshold", 0.8)
-        if group_total >= tier["group_limit"] * threshold:
+        lim = currency_limits(tier, currency)
+        if lim and group_total >= lim["group_limit"] * lim.get("alert_threshold", 0.8):
             return "approaching group limit"
     except Exception as exc:
         logger.warning("billing_charge_failed", group_id=group_id, error=str(exc))

@@ -8,7 +8,15 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from app.core.config import settings
 from app.core.logging_config import setup_logging
 from app.core.security import sanitize_group_id
-from app.services.billing import get_tier, period_key
+from app.services.billing import (
+    DEFAULT_CURRENCY,
+    currency_limits,
+    get_tier,
+    group_key,
+    limited_currencies,
+    period_key,
+    user_key,
+)
 
 logger = setup_logging()
 
@@ -33,36 +41,52 @@ class BillingMiddleware(BaseHTTPMiddleware):
         tier = get_tier(limits, org)
         pk = period_key(tier["period"])
 
+        # Limits are per currency (USD default, e.g. RUB separately). The
+        # provider — and so the currency — is not known before routing, so an
+        # exhausted budget in any limited currency blocks the request.
+        currencies = limited_currencies(tier)
         try:
-            group_key = f"billing:group:{org}:{pk}"
-            current_group = float(await redis.get(group_key) or 0)
-            if current_group >= tier["group_limit"]:
-                logger.info("billing_group_limit_reached", group_id=group_id, spent=current_group)
-                return JSONResponse(
-                    status_code=429,
-                    content={"error": "group spend limit reached", "spent": current_group, "limit": tier["group_limit"]},
-                )
+            for cur in currencies:
+                lim = currency_limits(tier, cur)
+                extra = {} if cur == DEFAULT_CURRENCY else {"currency": cur}
 
-            if "/" in group_id:
-                user_key = f"billing:user:{group_id}:{pk}"
-                current_user = float(await redis.get(user_key) or 0)
-                if current_user >= tier["user_limit"]:
-                    logger.info("billing_user_limit_reached", group_id=group_id, spent=current_user)
+                current_group = float(await redis.get(group_key(org, pk, cur)) or 0)
+                if current_group >= lim["group_limit"]:
+                    logger.info("billing_group_limit_reached", group_id=group_id,
+                                spent=current_group, currency=cur)
                     return JSONResponse(
                         status_code=429,
-                        content={"error": "user spend limit reached", "spent": current_user, "limit": tier["user_limit"]},
+                        content={"error": "group spend limit reached", "spent": current_group,
+                                 "limit": lim["group_limit"], **extra},
                     )
+
+                if "/" in group_id:
+                    current_user = float(await redis.get(user_key(group_id, pk, cur)) or 0)
+                    if current_user >= lim["user_limit"]:
+                        logger.info("billing_user_limit_reached", group_id=group_id,
+                                    spent=current_user, currency=cur)
+                        return JSONResponse(
+                            status_code=429,
+                            content={"error": "user spend limit reached", "spent": current_user,
+                                     "limit": lim["user_limit"], **extra},
+                        )
         except Exception as exc:
             logger.warning("billing_check_failed", group_id=group_id, error=str(exc))
             # Fail open — LLM access is more critical than a missed limit check
 
         response = await call_next(request)
 
-        # Soft warning header (based on pre-request read — no extra Redis call)
+        # Soft warning header
         try:
-            current_group = float(await redis.get(f"billing:group:{org}:{pk}") or 0)
-            if current_group >= tier["group_limit"] * tier.get("alert_threshold", 0.8):
-                response.headers["X-Billing-Warning"] = "approaching group limit"
+            for cur in currencies:
+                lim = currency_limits(tier, cur)
+                current_group = float(await redis.get(group_key(org, pk, cur)) or 0)
+                if current_group >= lim["group_limit"] * lim.get("alert_threshold", 0.8):
+                    response.headers["X-Billing-Warning"] = (
+                        "approaching group limit" if cur == DEFAULT_CURRENCY
+                        else f"approaching group limit ({cur})"
+                    )
+                    break
         except Exception:
             pass
 

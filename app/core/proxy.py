@@ -735,6 +735,7 @@ def _emit_completions_metrics(
                     billing_limits,
                     request.headers.get("x-group-id", "unknown"),
                     cost.total,
+                    currency=cur,
                 )
             )
 
@@ -1105,6 +1106,7 @@ def _emit_streaming_metrics(
                             billing_limits,
                             request.headers.get("x-group-id", "unknown"),
                             cost.total,
+                            currency=cur,
                         )
                     )
     except Exception as e:
