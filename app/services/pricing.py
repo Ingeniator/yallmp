@@ -65,15 +65,20 @@ class PricingCache:
                 pass
 
     def _lookup(self, provider_prefix: str, model_name: str) -> PricingInfo | None:
-        """Pricing for *model_name* at *provider_prefix*, or None. Does not log."""
+        """Pricing for *model_name* at *provider_prefix*, or None. Does not log.
+
+        Tries the name as given, then without this provider's own
+        ``<prefix>/``. Model ids may contain slashes themselves
+        (``openrouter/anthropic/claude-sonnet`` -> ``anthropic/claude-sonnet``),
+        so only the provider's prefix is removed, and only when it is present.
+        """
         models = self._cache.get(provider_prefix)
         if not models:
             return None
         pricing = models.get(model_name)
-        if pricing is None:
-            model_name_list = model_name.split("/")
-            if len(model_name_list) > 1:
-                pricing = models.get(model_name_list[1])
+        own = f"{provider_prefix}/"
+        if pricing is None and model_name.startswith(own):
+            pricing = models.get(model_name[len(own):])
         return pricing
 
     @staticmethod

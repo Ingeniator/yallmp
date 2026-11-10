@@ -450,3 +450,40 @@ def test_find_cost_routed_provider_without_price_does_not_fall_back():
 
 def test_find_cost_no_default_provider_returns_none():
     assert _routed_cache(default=None).find_cost("gpt-4o", 1, 1) is None
+
+
+# ── model names containing slashes ────────────────────────────────────────────
+
+
+def _openrouter_cache():
+    return _cache_with(
+        {
+            "openrouter": {
+                "anthropic/claude-sonnet": (3e-6, 15e-6),
+                "claude-sonnet": (9.0, 9.0),  # unrelated entry, must never be picked
+            }
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "name", ["anthropic/claude-sonnet", "openrouter/anthropic/claude-sonnet"]
+)
+def test_get_cost_multi_slash_model(name):
+    cost = _openrouter_cache().get_cost("openrouter", name, 1000, 1000)
+    assert cost is not None
+    assert cost.total == pytest.approx(0.018)
+
+
+def test_get_cost_does_not_strip_foreign_prefix():
+    # "anthropic/" is not this provider's prefix: no fallback to "claude-sonnet"
+    pc = _cache_with({"openrouter": {"claude-sonnet": (9.0, 9.0)}})
+    assert pc.get_cost("openrouter", "anthropic/claude-sonnet", 1, 1) is None
+
+
+def test_find_cost_multi_slash_model_via_routing():
+    pc = _openrouter_cache()
+    pc._resolve_prefix = lambda m: "openrouter"
+    prefix, _, cost = pc.find_cost("openrouter/anthropic/claude-sonnet", 1000, 1000)
+    assert prefix == "openrouter"
+    assert cost.total == pytest.approx(0.018)
