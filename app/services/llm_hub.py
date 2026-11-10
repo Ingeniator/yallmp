@@ -27,9 +27,9 @@ _MODELS_TTL = 3600  # seconds a fetched model list is cached
 _MODELS_RETRY_AFTER = 60  # seconds before retrying a failed model list fetch
 _MODELS_FETCH_TIMEOUT = 10  # seconds; independent of the provider's completion timeouts
 _MODELS_PRUNE_AFTER = _MODELS_TTL  # seconds past expiry before an entry is dropped
-# ${VAR} left over after os.path.expandvars, i.e. an unset environment variable.
-# ${headers.X} are PASSTHROUGH placeholders, resolved per request.
-_UNRESOLVED_ENV_VAR = re.compile(r"\$\{(?!headers\.)([^}]+)\}")
+# ${VAR} references in a provider file. ${headers.X} are PASSTHROUGH placeholders,
+# resolved per request.
+_ENV_VAR_REF = re.compile(r"\$\{(?!headers\.)([^}]+)\}")
 
 
 async def _fetch_model_list(
@@ -159,10 +159,13 @@ class LlmHub:
                     logger.debug(f"Skipping {json_file.name}: no 'prefix' field")
                     continue
 
-                unresolved = sorted(set(_UNRESOLVED_ENV_VAR.findall(expanded)))
+                # Empty counts as unset: docker compose turns a missing ${X:-} into "".
+                unresolved = sorted(
+                    {v for v in _ENV_VAR_REF.findall(raw) if not os.environ.get(v)}
+                )
                 if unresolved:
                     logger.error(
-                        f"Skipping {json_file.name}: environment variables not set: "
+                        f"Skipping {json_file.name}: environment variables not set or empty: "
                         f"{', '.join(unresolved)}"
                     )
                     continue

@@ -1,0 +1,13 @@
+{
+    "prefix": "gpt2giga",
+    "base_url": "${LLM_GPT2GIGA_BASE_URL}",
+    "currency": "RUB",
+    "auth": {
+        "type": "BEARER",
+        "api_key": "${LLM_GPT2GIGA_API_KEY}"
+    },
+    "models": [],
+    "verify_ssl": false,
+    "timeout": { "connect": 10, "read": 300, "write": 30 },
+    "max_retries": 3
+}

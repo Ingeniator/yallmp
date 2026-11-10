@@ -644,3 +644,15 @@ def test_provider_circuit_breaker_defaults_to_global_settings(monkeypatch):
     monkeypatch.setattr(proxy_mod.settings, "proxy_failure_threshold", 5)
     provider = LlmProvider(LlmProviderConfig(prefix="p", base_url="http://p"))
     assert provider.circuit_breaker.failure_threshold == 5
+
+
+def test_load_providers_skips_empty_env_var(tmp_path, monkeypatch):
+    """docker compose turns a missing ${X:-} into "": treat it like unset."""
+    monkeypatch.setenv("TEST_EMPTY_KEY", "")
+    (tmp_path / "p.json").write_text(json.dumps({
+        "prefix": "p", "base_url": "http://p",
+        "auth": {"type": "BEARER", "api_key": "${TEST_EMPTY_KEY}"},
+    }))
+    h = LlmHub()
+    h.load_providers(str(tmp_path))
+    assert h.providers == {}
